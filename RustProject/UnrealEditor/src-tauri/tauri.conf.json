@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "unrealeditor",
+  "productName": "LowCode Platform",
   "version": "0.1.0",
-  "identifier": "com.qy.unrealeditor",
+  "identifier": "com.qy.lowcodeplatform",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "unrealeditor",
+        "title": "业务系统低代码协同开发平台",
         "width": 800,
         "height": 600
       }

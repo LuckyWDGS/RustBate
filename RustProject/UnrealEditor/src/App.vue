@@ -3,7 +3,7 @@
     <header class="header">
       <h2>我的项目</h2>
       <div class="search-bar">
-        <input type="text" v-model="searchQuery" placeholder="请输入关键词" />
+        <input type="text" v-model="searchQuery" placeholder="请输入项目名称" />
         <span class="search-icon">
           <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" class="css-i6dzq1"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
         </span>
@@ -81,7 +81,7 @@
 
       <!-- Empty State -->
       <div v-if="filteredProjects.length === 0 && !isScanning" class="empty-state">
-        <p>未找到项目，请尝试更换扫描路径或检查文件夹。</p>
+        <p>未找到项目，请重新查找</p>
       </div>
     </div>
     
@@ -509,6 +509,9 @@ onMounted(async () => {
         runningProjects.value.delete(payload.path);
       }
     });
+
+    // Auto-scan projects on startup
+    await scanProjects();
   } catch (e) {
     console.error("Failed to setup event listener", e);
   }

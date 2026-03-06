@@ -49,7 +49,7 @@ fn scan_projects(dir_path: &str) -> Vec<ProjectInfo> {
                                 .to_string();
 
                             let mut last_modified = 0;
-                            if let Ok(metadata) = entry.metadata() {
+                            if let Ok(metadata) = fs::metadata(&current_dir) {
                                 if let Ok(modified) = metadata.modified() {
                                     if let Ok(duration) = modified.duration_since(UNIX_EPOCH) {
                                         last_modified = duration.as_secs();
@@ -60,17 +60,14 @@ fn scan_projects(dir_path: &str) -> Vec<ProjectInfo> {
                             let normalized_path =
                                 path.to_string_lossy().to_string().replace('\\', "/");
 
-                            // Check for ProjectPreview.png or ProjectPreview.PNG
+                            // Only check for Saved/AutoScreenshot.png
                             let mut preview_image = None;
-                            let png_path = current_dir.join("ProjectPreview.png");
-                            let upper_png_path = current_dir.join("ProjectPreview.PNG");
+                            let screenshot_path =
+                                current_dir.join("Saved").join("AutoScreenshot.png");
 
-                            if png_path.exists() {
-                                preview_image =
-                                    Some(png_path.to_string_lossy().to_string().replace('\\', "/"));
-                            } else if upper_png_path.exists() {
+                            if screenshot_path.exists() {
                                 preview_image = Some(
-                                    upper_png_path
+                                    screenshot_path
                                         .to_string_lossy()
                                         .to_string()
                                         .replace('\\', "/"),
@@ -303,17 +300,14 @@ fn get_templates(dir_path: &str) -> Vec<TemplateInfo> {
                             let normalized_path =
                                 path.to_string_lossy().to_string().replace('\\', "/");
 
-                            // Check for ProjectPreview.png or ProjectPreview.PNG
+                            // Only check for Saved/AutoScreenshot.png
                             let mut preview_image = None;
-                            let png_path = current_dir.join("ProjectPreview.png");
-                            let upper_png_path = current_dir.join("ProjectPreview.PNG");
+                            let screenshot_path =
+                                current_dir.join("Saved").join("AutoScreenshot.png");
 
-                            if png_path.exists() {
-                                preview_image =
-                                    Some(png_path.to_string_lossy().to_string().replace('\\', "/"));
-                            } else if upper_png_path.exists() {
+                            if screenshot_path.exists() {
                                 preview_image = Some(
-                                    upper_png_path
+                                    screenshot_path
                                         .to_string_lossy()
                                         .to_string()
                                         .replace('\\', "/"),
