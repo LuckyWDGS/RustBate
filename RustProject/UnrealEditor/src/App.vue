@@ -10,12 +10,8 @@
       </div>
     </header>
 
-    <div class="actions-bar">
-      <span class="actions-label">项目扫描路径: </span>
-      <input type="text" v-model="scanPath" placeholder="输入扫描路径 (例如 D:/Projects)" class="path-input" />
-      <button @click="scanProjects" class="scan-button" :disabled="isScanning">
-        {{ isScanning ? '扫描中...' : '扫描项目' }}
-      </button>
+    <div class="actions-bar" style="margin-bottom: 24px;">
+      <h3 style="margin: 0; color: #303133; font-size: 16px; font-weight: 600;">项目列表</h3>
     </div>
 
     <div class="project-grid">
@@ -38,10 +34,10 @@
           </div>
           
           <!-- Hover Overlay -->
-          <div class="hover-overlay" v-if="!runningProjects.has(project.path)">
-            <button class="overlay-btn" @click.stop="openProject(project)">项目编辑</button>
-            <button class="overlay-btn" @click.stop="cloneProject(project)">克隆工程</button>
-          </div>
+        <div class="project-overlay" v-if="!runningProjects.has(project.path)">
+          <button class="action-btn main-btn" @click="openProject(project)">项目编辑</button>
+          <button class="action-btn sub-btn" @click="startDuplicate(project, '副本')">创建副本</button>
+        </div>
           
           <!-- Running Overlay -->
           <div class="running-overlay" v-if="runningProjects.has(project.path)">
@@ -51,25 +47,11 @@
         </div>
         
         <div class="card-footer">
-          <div class="project-info-left">
+          <div class="project-info-left" @click="!runningProjects.has(project.path) && startRename(project)">
             <span class="edit-icon">
               <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
             </span>
-            <input 
-              v-if="editingProjectIndex === index"
-              type="text"
-              class="name-input"
-              v-model="editingName"
-              @blur="finishEditing(project)"
-              @keyup.enter="finishEditing(project)"
-              ref="nameInput"
-              autoFocus
-            />
-            <span 
-              v-else 
-              class="name-text" 
-              @click="!runningProjects.has(project.path) && startEditing(index, project.name)"
-            >
+            <span class="name-text">
               {{ project.name }}
             </span>
           </div>
@@ -86,21 +68,24 @@
     </div>
     
     <!-- Custom Clone Modal -->
+    <!-- Duplicate Modal -->
     <div class="modal-overlay" v-if="isCloneModalOpen">
       <div class="modal-content">
-        <h3>克隆项目</h3>
-        <p class="modal-desc">第一步：请输入新克隆的项目名称</p>
+        <h3>创建项目副本</h3>
+        <p class="modal-desc">请输入新副本的项目名称</p>
         <input 
           type="text" 
           v-model="cloneInputName" 
           class="modal-input" 
+          :class="{ 'input-error': cloneValidationError }"
           placeholder="请输入项目名称"
-          @keyup.enter="confirmCloneName"
+          @keyup.enter="!cloneValidationError && confirmCloneName()"
           autoFocus
         />
+        <div v-if="cloneValidationError" class="validation-error">{{ cloneValidationError }}</div>
         <div class="modal-actions">
           <button class="modal-btn cancel" @click="cancelClone">取消</button>
-          <button class="modal-btn confirm" @click="confirmCloneName">下一步</button>
+          <button class="modal-btn confirm" :disabled="!!cloneValidationError" @click="confirmCloneName">确认创建</button>
         </div>
       </div>
     </div>
@@ -109,18 +94,42 @@
     <div class="modal-overlay" v-if="isCreateNameModalOpen">
       <div class="modal-content">
         <h3>基于模板创建</h3>
-        <p class="modal-desc">第一步：请输入新项目的名称</p>
+        <p class="modal-desc">请输入新项目的名称</p>
         <input 
           type="text" 
           v-model="createInputName" 
           class="modal-input" 
+          :class="{ 'input-error': createValidationError }"
           placeholder="请输入项目名称"
-          @keyup.enter="confirmCreateName"
+          @keyup.enter="!createValidationError && confirmCreateName()"
           autoFocus
         />
+        <div v-if="createValidationError" class="validation-error">{{ createValidationError }}</div>
         <div class="modal-actions">
           <button class="modal-btn cancel" @click="cancelCreateName">取消</button>
-          <button class="modal-btn confirm" @click="confirmCreateName">下一步</button>
+          <button class="modal-btn confirm" :disabled="!!createValidationError" @click="confirmCreateName">确认创建</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Rename Modal -->
+    <div class="modal-overlay" v-if="isRenameModalOpen">
+      <div class="modal-content">
+        <h3>重命名项目</h3>
+        <p class="modal-desc">请输入新的项目名称</p>
+        <input 
+          type="text" 
+          v-model="renameInputName" 
+          class="modal-input" 
+          :class="{ 'input-error': renameValidationError }"
+          placeholder="请输入项目名称"
+          @keyup.enter="!renameValidationError && confirmRename()"
+          autoFocus
+        />
+        <div v-if="renameValidationError" class="validation-error">{{ renameValidationError }}</div>
+        <div class="modal-actions">
+          <button class="modal-btn cancel" @click="cancelRename">取消</button>
+          <button class="modal-btn confirm" :disabled="!!renameValidationError" @click="confirmRename">确认重命名</button>
         </div>
       </div>
     </div>
@@ -140,16 +149,18 @@
               v-for="category in categories" 
               :key="category"
               class="category-card"
-              :class="{ 'active': selectedCategory === category, 'game-bg': category === '游戏', 'movie-bg': category === '影视与现场活动' }"
-              @click="selectedCategory = category"
+              :class="{ 
+                'active': selectedCategory === category, 
+                'game-bg': category.includes('园区'), 
+                'movie-bg': category.includes('能源'),
+                'disabled': category.includes('（未建设）')
+              }"
+              @click="!category.includes('（未建设）') && (selectedCategory = category)"
             >
               <div class="category-title">{{ category }}</div>
             </div>
             
-            <div class="template-path-setting">
-               <div style="font-size: 11px; color: #909399; margin-bottom: 4px;">模板库路径:</div>
-               <input type="text" v-model="templatePath" placeholder="例如 D:/Templates" class="small-path-input" @blur="fetchTemplates" @keyup.enter="fetchTemplates" />
-               <button class="refresh-btn" @click="fetchTemplates">刷新</button>
+            <div class="template-path-setting" style="margin-top: auto; border: none; background: transparent;">
             </div>
           </div>
           
@@ -211,10 +222,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
-import { open as openDialog } from '@tauri-apps/plugin-dialog';
 
 interface ProjectInfo {
   name: string;
@@ -237,7 +247,6 @@ interface TemplateInfo {
 }
 
 const searchQuery = ref('');
-const scanPath = ref('D:\\Testproject'); // User can change this in UI
 const projects = ref<ProjectInfo[]>([]);
 const isScanning = ref(false);
 
@@ -256,8 +265,101 @@ function showToast(message: string, type: 'success' | 'error' | 'info' = 'info')
   }, 3000);
 }
 
-const editingProjectIndex = ref<number | null>(null);
-const editingName = ref('');
+// Clone Modal State
+const isCloneModalOpen = ref(false);
+const cloneInputName = ref('');
+const pendingCloneProject = ref<ProjectInfo | null>(null);
+
+// Template Modal State
+const isTemplateModalOpen = ref(false);
+const templates = ref<TemplateInfo[]>([]);
+const categories = ['站场数字孪生', '园区数字孪生（未建设）', '能源数字孪生（未建设）'];
+const selectedCategory = ref('站场数字孪生');
+const selectedTemplate = ref<TemplateInfo | null>(null);
+
+// Template Creation Modal State
+const isCreateNameModalOpen = ref(false);
+const createInputName = ref('');
+
+// Rename Modal State
+const isRenameModalOpen = ref(false);
+const renameInputName = ref('');
+const renameValidationError = ref('');
+const pendingRenameProject = ref<ProjectInfo | null>(null);
+
+// Validation Strings
+const createValidationError = ref('');
+const cloneValidationError = ref('');
+
+// Unified Naming Validation (Sync part)
+function checkNameFormat(name: string): { valid: boolean; message: string } {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    return { valid: false, message: '名称不能为空！' };
+  }
+  if (trimmed.length > 12) {
+    return { valid: false, message: '名称不能超过 12 个字符！' };
+  }
+  const regex = /^[a-zA-Z0-9\u4e00-\u9fa5_]+$/;
+  if (!regex.test(trimmed)) {
+    return { valid: false, message: '名称只能包含中文、英文、数字和下划线！' };
+  }
+  return { valid: true, message: '' };
+}
+
+// Watch rename name for real-time validation
+watch(renameInputName, async (newVal) => {
+  const format = checkNameFormat(newVal);
+  if (!format.valid) {
+    renameValidationError.value = format.message;
+    return;
+  }
+  
+  if (pendingRenameProject.value && newVal.trim() === pendingRenameProject.value.name) {
+    renameValidationError.value = '';
+    return;
+  }
+
+  const exists = await invoke<boolean>('check_project_folder_exists', { name: newVal.trim() });
+  if (exists) {
+    renameValidationError.value = '目录下已存在同名项目';
+  } else {
+    renameValidationError.value = '';
+  }
+});
+
+// Watch create name for real-time validation
+watch(createInputName, async (newVal) => {
+  const format = checkNameFormat(newVal);
+  if (!format.valid) {
+    createValidationError.value = format.message;
+    return;
+  }
+  
+  const exists = await invoke<boolean>('check_project_folder_exists', { name: newVal.trim() });
+  if (exists) {
+    createValidationError.value = '目录下已存在同名项目';
+  } else {
+    createValidationError.value = '';
+  }
+});
+
+// Watch clone name for real-time validation
+watch(cloneInputName, async (newVal) => {
+  const format = checkNameFormat(newVal);
+  if (!format.valid) {
+    cloneValidationError.value = format.message;
+    return;
+  }
+  
+  const exists = await invoke<boolean>('check_project_folder_exists', { name: newVal.trim() });
+  if (exists) {
+    cloneValidationError.value = '目录下已存在同名项目';
+  } else {
+    cloneValidationError.value = '';
+  }
+});
+
 
 const filteredProjects = computed(() => {
   if (!searchQuery.value) return projects.value;
@@ -266,17 +368,10 @@ const filteredProjects = computed(() => {
 });
 
 // Clone Modal State
-const isCloneModalOpen = ref(false);
-const cloneInputName = ref('');
-const pendingCloneProject = ref<ProjectInfo | null>(null);
+// (Removed duplicates)
 
 // Template Modal State
-const isTemplateModalOpen = ref(false);
-const templatePath = ref('D:/Templates'); // Default templates path
-const templates = ref<TemplateInfo[]>([]);
-const categories = ['铁路数字孪生', '游戏', '影视与现场活动'];
-const selectedCategory = ref('铁路数字孪生');
-const selectedTemplate = ref<TemplateInfo | null>(null);
+// (Removed duplicates)
 
 const currentTemplates = computed(() => {
   if (!selectedCategory.value) return [];
@@ -285,9 +380,8 @@ const currentTemplates = computed(() => {
 });
 
 async function fetchTemplates() {
-  if (!templatePath.value) return;
   try {
-    const result = await invoke<TemplateInfo[]>('get_templates', { dirPath: templatePath.value });
+    const result = await invoke<TemplateInfo[]>('get_templates');
     templates.value = result;
   } catch (error) {
     console.error('Failed to fetch templates:', error);
@@ -306,8 +400,7 @@ function closeTemplateModal() {
 }
 
 // Template Creation Modal State
-const isCreateNameModalOpen = ref(false);
-const createInputName = ref('');
+// (Removed duplicates)
 
 function createFromTemplate() {
   if (!selectedTemplate.value) return;
@@ -324,47 +417,30 @@ async function confirmCreateName() {
   const template = selectedTemplate.value;
   if (!template) return;
   
+  if (createValidationError.value) return;
+  
   const newName = createInputName.value.trim();
-  if (!newName) {
-    showToast('项目名称不能为空！', 'error');
-    return;
-  }
-  
   isCreateNameModalOpen.value = false;
+  isTemplateModalOpen.value = false;
   
-  const selectedDir = await openDialog({
-    directory: true,
-    multiple: false,
-    title: `第二步：选择【${newName}】要保存的目录`
-  });
-
-  if (selectedDir) {
-    const targetDir = Array.isArray(selectedDir) ? selectedDir[0] : selectedDir;
-    isTemplateModalOpen.value = false; // Close the background template picker
-    
-    try {
-      await invoke('clone_project', {
-        sourceUprojectPath: template.path, 
-        targetDir: targetDir,
-        newName: newName
-      });
-      showToast('项目创建成功！', 'success');
-      if (targetDir.startsWith(scanPath.value)) {
-         await scanProjects();
-      }
-    } catch (error) {
-      console.error('Failed to create from template:', error);
-      showToast('创建项目失败: ' + error, 'error');
-    }
+  try {
+    await invoke('clone_project', {
+      sourceUprojectPath: template.path, 
+      targetDir: "", // Backend will default to UnrealProject
+      newName: newName
+    });
+    showToast('项目创建成功！', 'success');
+    await scanProjects();
+  } catch (error) {
+    console.error('Failed to create from template:', error);
+    showToast('创建项目失败: ' + error, 'error');
   }
 }
 
 async function scanProjects() {
-  if (!scanPath.value) return;
-  
   isScanning.value = true;
   try {
-    const result = await invoke<ProjectInfo[]>('scan_projects', { dirPath: scanPath.value });
+    const result = await invoke<ProjectInfo[]>('scan_projects');
     projects.value = result;
   } catch (error) {
     console.error('Failed to scan projects:', error);
@@ -374,49 +450,44 @@ async function scanProjects() {
   }
 }
 
-function startEditing(index: number, currentName: string) {
-  editingProjectIndex.value = index;
-  editingName.value = currentName;
+
+// (Legacy startEditing removed)
+
+
+function startRename(project: ProjectInfo) {
+  pendingRenameProject.value = project;
+  renameInputName.value = project.name;
+  isRenameModalOpen.value = true;
 }
 
-async function finishEditing(project: ProjectInfo) {
-  if (editingProjectIndex.value === null) return;
+function cancelRename() {
+  isRenameModalOpen.value = false;
+  pendingRenameProject.value = null;
+}
+
+async function confirmRename() {
+  const project = pendingRenameProject.value;
+  if (!project || renameValidationError.value) return;
+
+  const newName = renameInputName.value.trim();
   
-  const newName = editingName.value.trim();
-  
-  // Validation: Check if empty
-  if (!newName) {
-    showToast('项目名称不能为空！', 'error');
-    editingProjectIndex.value = null;
+  if (newName === project.name) {
+    isRenameModalOpen.value = false;
     return;
   }
-  
-  // Validation: Check for duplicates
-  const isDuplicate = projects.value.some(p => 
-    p.name.toLowerCase() === newName.toLowerCase() && p.path !== project.path
-  );
-  if (isDuplicate) {
-    showToast('该目录下已存在同名项目！', 'error');
-    editingProjectIndex.value = null;
-    return;
+
+  try {
+    await invoke('rename_project', {
+      oldPath: project.path,
+      newName: newName
+    });
+    showToast('重命名成功', 'success');
+    isRenameModalOpen.value = false;
+    await scanProjects();
+  } catch (error) {
+    console.error('Failed to rename project:', error);
+    showToast('重命名失败: ' + error, 'error');
   }
-  
-  if (newName !== project.name) {
-    try {
-      await invoke('rename_project', {
-        oldPath: project.path,
-        newName: newName
-      });
-      showToast('重命名成功', 'success');
-      // Refresh list to show updated name and path
-      await scanProjects();
-    } catch (error) {
-      console.error('Failed to rename project:', error);
-      showToast('重命名失败: ' + error, 'error');
-    }
-  }
-  
-  editingProjectIndex.value = null;
 }
 
 async function openProject(project: ProjectInfo) {
@@ -432,59 +503,65 @@ async function openProject(project: ProjectInfo) {
   }
 }
 
-// Replace the native prompt with our custom modal logic
-function cloneProject(project: ProjectInfo) {
+async function findAvailableName(baseName: string, suffix: string): Promise<string> {
+  // Logic: base_副本, then base_副本2, base_副本3...
+  // Use underscore only for the first one if it's the standard "副本"
+  let attempt = "";
+  if (suffix === "副本") {
+    attempt = `${baseName}_${suffix}`;
+  } else {
+    attempt = `${baseName}_${suffix}`;
+  }
+  
+  // Truncate base if total length exceeds 12
+  if (attempt.length > 12) {
+    attempt = attempt.slice(0, 12);
+  }
+
+  let count = 1;
+  while (true) {
+    const checkName = count === 1 ? attempt : `${attempt}${count}`;
+    const exists = await invoke<boolean>('check_project_folder_exists', { name: checkName });
+    if (!exists) return checkName;
+    count++;
+    if (count > 20) return attempt; // Guard
+  }
+}
+
+async function startDuplicate(project: ProjectInfo, modeSuffix: string) {
   pendingCloneProject.value = project;
-  cloneInputName.value = `${project.name}_Copy`;
+  cloneInputName.value = await findAvailableName(project.name, modeSuffix);
   isCloneModalOpen.value = true;
 }
 
 function cancelClone() {
   isCloneModalOpen.value = false;
   pendingCloneProject.value = null;
+  cloneInputName.value = '';
 }
 
 async function confirmCloneName() {
   const project = pendingCloneProject.value;
   if (!project) return;
   
-  const newName = cloneInputName.value.trim();
-  if (!newName) {
-    showToast('项目名称不能为空！', 'error');
-    return;
-  }
+  if (cloneValidationError.value) return;
   
-  // Close the modal and proceed to directory selection
+  const newName = cloneInputName.value.trim();
   isCloneModalOpen.value = false;
   
   try {
-    const selectedDir = await openDialog({
-      directory: true,
-      multiple: false,
-      title: `第二步：选择【${newName}】要保存的目录`
+    await invoke('clone_project', {
+      sourceUprojectPath: project.path,
+      targetDir: "", // Defaults to UnrealProject
+      newName: newName
     });
-
-    if (selectedDir) {
-      const targetDir = Array.isArray(selectedDir) ? selectedDir[0] : selectedDir;
-      
-      await invoke('clone_project', {
-        sourceUprojectPath: project.path,
-        targetDir: targetDir,
-        newName: newName
-      });
-      
-      showToast('项目克隆成功！', 'success');
-      pendingCloneProject.value = null;
-      
-      if (targetDir.startsWith(scanPath.value)) {
-         await scanProjects();
-      }
-    } else {
-      pendingCloneProject.value = null;
-    }
+    
+    showToast('项目副本创建成功！', 'success');
+    pendingCloneProject.value = null;
+    await scanProjects();
   } catch (error) {
-    console.error('Failed to clone project:', error);
-    showToast('克隆项目失败: ' + error, 'error');
+    console.error('Failed to duplicate project:', error);
+    showToast('创建副本失败: ' + error, 'error');
     pendingCloneProject.value = null;
   }
 }
@@ -743,25 +820,72 @@ html, body {
   box-shadow: 10px 10px 20px rgba(0,0,0,0.1);
 }
 
-.hover-overlay {
+.project-overlay {
   position: absolute;
   top: 0;
   left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(0, 0, 0, 0.65);
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.4);
   display: flex;
   flex-direction: column;
-  justify-content: center;
   align-items: center;
-  gap: 12px;
+  justify-content: center;
   opacity: 0;
-  transition: opacity 0.3s ease;
-  backdrop-filter: blur(2px);
+  transition: opacity 0.2s ease;
+  padding: 12px;
+  gap: 4px;
 }
 
-.project-card:hover .hover-overlay {
+.project-card:hover .project-overlay {
   opacity: 1;
+}
+
+.action-btn {
+  box-sizing: border-box;
+  border: none;
+  cursor: pointer;
+  font-weight: 500;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.main-btn {
+  width: 180px;
+  height: 40px;
+  background: #aab2bd;
+  color: white;
+  border-radius: 6px;
+  font-size: 15px;
+  margin-bottom: 2px;
+  border: none;
+  font-weight: 600;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.sub-btn {
+  width: 180px;
+  height: 30px;
+  background: white;
+  color: #333;
+  border: 1px solid #e4e7ed;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 0px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+.action-btn:hover {
+  transform: translateY(-2px);
+  filter: brightness(1.02);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+}
+
+.action-btn:active {
+  transform: translateY(0);
 }
 
 .running-overlay {
@@ -795,31 +919,6 @@ html, body {
 @keyframes spin {
   0% { transform: rotate(0deg); }
   100% { transform: rotate(360deg); }
-}
-
-.overlay-btn {
-  background: white;
-  color: #303133;
-  border: none;
-  padding: 8px 24px;
-  border-radius: 20px;
-  font-weight: bold;
-  font-size: 14px;
-  cursor: pointer;
-  min-width: 130px;
-  transition: all 0.2s;
-  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-}
-
-.overlay-btn:hover {
-  background: #f4f4f5;
-  transform: translateY(-2px);
-  box-shadow: 0 6px 12px rgba(0,0,0,0.15);
-}
-
-.overlay-btn:active {
-  transform: translateY(0);
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 
 .card-footer {
@@ -1088,6 +1187,18 @@ html, body {
 .category-card.active .category-title {
   color: #fff;
   font-weight: bold;
+}
+
+.category-card.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  filter: grayscale(0.5);
+}
+
+.category-card.disabled:hover {
+  transform: none;
+  box-shadow: none;
+  border-color: #333;
 }
 
 .category-card.game-bg {
@@ -1368,6 +1479,18 @@ html, body {
 .toast-leave-to {
   opacity: 0;
   transform: translateY(-20px);
+}
+
+.modal-input.input-error {
+  border-color: #f56c6c;
+}
+
+.validation-error {
+  color: #f56c6c;
+  font-size: 12px;
+  margin-top: -8px;
+  margin-bottom: 8px;
+  text-align: left;
 }
 
 </style>

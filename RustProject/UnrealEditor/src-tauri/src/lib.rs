@@ -12,10 +12,33 @@ pub struct ProjectInfo {
     preview_image: Option<String>,
 }
 
+// Helper function to resolve paths
+fn get_base_dir() -> std::path::PathBuf {
+    #[cfg(debug_assertions)]
+    {
+        // In dev mode, current_dir is usually UnrealEditor or UnrealEditor/src-tauri
+        let mut dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        if dir.file_name().and_then(|n| n.to_str()) == Some("src-tauri") {
+            dir.pop();
+        }
+        // One level above editor is the parent
+        dir.parent().unwrap_or(&dir).to_path_buf()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        // In prod mode, current_exe is UnrealEditor.exe inside UnrealEditor dir
+        let exe_path = std::env::current_exe().unwrap_or_else(|_| std::env::current_dir().unwrap());
+        let exe_dir = exe_path.parent().unwrap_or_else(|| std::path::Path::new(""));
+        // One level above editor is the parent
+        exe_dir.parent().unwrap_or(exe_dir).to_path_buf()
+    }
+}
+
 #[tauri::command]
-fn scan_projects(dir_path: &str) -> Vec<ProjectInfo> {
+fn scan_projects() -> Vec<ProjectInfo> {
     let mut projects = Vec::new();
-    let root = Path::new(dir_path);
+    let base_dir = get_base_dir();
+    let root = base_dir.join("UnrealProject");
 
     if !root.exists() || !root.is_dir() {
         return projects;
@@ -98,10 +121,10 @@ use tauri_plugin_opener::OpenerExt;
 fn rename_project(old_path: &str, new_name: &str) -> Result<String, String> {
     let old_file = Path::new(old_path);
     if !old_file.exists() {
-        return Err("Project file does not exist".to_string());
+        return Err("项目文件不存在".to_string());
     }
 
-    let parent_dir = old_file.parent().ok_or("Cannot find parent directory")?;
+    let parent_dir = old_file.parent().ok_or("找不到父目录")?;
     let old_name = old_file.file_stem().and_then(|n| n.to_str()).unwrap_or("");
 
     // Check if the parent dir has the exact same name as the .uproject file
@@ -111,11 +134,15 @@ fn rename_project(old_path: &str, new_name: &str) -> Result<String, String> {
         .unwrap_or("");
 
     if parent_dir_name == old_name {
-        // We need to rename the parent folder as well
+        // Renaming folder and file
         let grand_parent = parent_dir
             .parent()
-            .ok_or("Cannot find grandparent directory")?;
+            .ok_or("找不到上级目录")?;
         let new_parent_dir = grand_parent.join(new_name);
+
+        if new_parent_dir.exists() {
+            return Err("目标目录已存在，请更换名称".to_string());
+        }
 
         fs::rename(parent_dir, &new_parent_dir).map_err(|e| e.to_string())?;
 
@@ -132,8 +159,13 @@ fn rename_project(old_path: &str, new_name: &str) -> Result<String, String> {
             .to_string()
             .replace('\\', "/"));
     } else {
-        // Just rename the .uproject file
+        // Just renaming the .uproject file
         let new_file_path = parent_dir.join(format!("{}.uproject", new_name));
+        
+        if new_file_path.exists() {
+            return Err("同名项目文件已存在".to_string());
+        }
+
         fs::rename(old_file, &new_file_path).map_err(|e| e.to_string())?;
 
         return Ok(new_file_path
@@ -156,6 +188,13 @@ struct ProjectClosedPayload {
 }
 
 #[tauri::command]
+fn check_project_folder_exists(name: &str) -> bool {
+    let base_dir = get_base_dir();
+    let target_dir = base_dir.join("UnrealProject").join(name);
+    target_dir.exists() && target_dir.is_dir()
+}
+
+#[tauri::command]
 async fn run_project(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let path_clone = path.clone();
 
@@ -163,13 +202,19 @@ async fn run_project(app: tauri::AppHandle, path: String) -> Result<(), String> 
         // `cmd /c start /wait` may return immediately if the default handler (UnrealVersionSelector)
         // just hands off the process to UnrealEditor.exe.
         // We'll try using PowerShell's Start-Process with -Wait.
-        let mut child = match std::process::Command::new("powershell")
-            .args([
-                "-Command",
-                &format!("Start-Process -FilePath \"{}\" -Wait", path_clone),
-            ])
-            .spawn()
+        let mut cmd = std::process::Command::new("powershell");
+        cmd.args([
+            "-Command",
+            &format!("Start-Process -FilePath \"{}\" -Wait", path_clone),
+        ]);
+
+        #[cfg(target_os = "windows")]
         {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+
+        let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("Failed to spawn process: {}", e);
@@ -195,21 +240,26 @@ async fn run_project(app: tauri::AppHandle, path: String) -> Result<(), String> 
 #[tauri::command]
 fn clone_project(
     source_uproject_path: &str,
-    target_dir: &str,
+    target_dir: &str, // If empty, defaults to UnrealProject
     new_name: &str,
 ) -> Result<String, String> {
     let source_file = Path::new(source_uproject_path);
     if !source_file.exists() {
-        return Err("Source project file does not exist".to_string());
+        return Err("源项目文件不存在".to_string());
     }
 
-    let source_dir = source_file.parent().ok_or("Cannot find source directory")?;
-    let target_root = Path::new(target_dir);
-    let target_project_dir = target_root.join(new_name);
+    let source_dir = source_file.parent().ok_or("找不到源目录")?;
+    
+    let target_project_dir = if target_dir.is_empty() {
+        let base_dir = get_base_dir();
+        base_dir.join("UnrealProject").join(new_name)
+    } else {
+        Path::new(target_dir).join(new_name)
+    };
 
     if target_project_dir.exists() {
         return Err(
-            "A folder with the new project name already exists in the target directory".to_string(),
+            "目标目录下已存在同名文件夹，请更换项目名称".to_string(),
         );
     }
 
@@ -262,9 +312,10 @@ pub struct TemplateInfo {
 }
 
 #[tauri::command]
-fn get_templates(dir_path: &str) -> Vec<TemplateInfo> {
+fn get_templates() -> Vec<TemplateInfo> {
     let mut templates = Vec::new();
-    let root = Path::new(dir_path);
+    let base_dir = get_base_dir();
+    let root = base_dir.join("Templates");
 
     if !root.exists() || !root.is_dir() {
         return templates;
@@ -300,6 +351,24 @@ fn get_templates(dir_path: &str) -> Vec<TemplateInfo> {
                             let normalized_path =
                                 path.to_string_lossy().to_string().replace('\\', "/");
 
+                            // Dynamic category detection
+                            // If templates/CategoryA/Project/file.uproject, depth will be 2
+                            // root is level 0. subfolder is level 1. project folder is level 2.
+                            let mut category = "站场数字孪生".to_string();
+                            if depth >= 1 {
+                                // Try to get the folder name right under root
+                                let relative = path.strip_prefix(&root).ok();
+                                if let Some(rel) = relative {
+                                    if let Some(cat) = rel.components().next() {
+                                        let cat_str = cat.as_os_str().to_string_lossy().to_string();
+                                        // Only use it if it's not the uproject file itself (i.e. it's a directory)
+                                        if root.join(&cat_str).is_dir() {
+                                            category = cat_str;
+                                        }
+                                    }
+                                }
+                            }
+
                             // Only check for Saved/AutoScreenshot.png
                             let mut preview_image = None;
                             let screenshot_path =
@@ -315,7 +384,7 @@ fn get_templates(dir_path: &str) -> Vec<TemplateInfo> {
                             }
 
                             templates.push(TemplateInfo {
-                                category: "铁路数字孪生".to_string(), // Fixed category per user's request
+                                category,
                                 name,
                                 path: normalized_path,
                                 preview_image,
@@ -342,7 +411,8 @@ pub fn run() {
             open_project,
             run_project,
             clone_project,
-            get_templates
+            get_templates,
+            check_project_folder_exists
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
