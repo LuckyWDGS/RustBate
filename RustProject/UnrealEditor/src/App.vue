@@ -2,8 +2,14 @@
   <div class="project-manager">
     <header class="header">
       <h2>我的项目</h2>
-      <div class="search-bar">
-        <input type="text" v-model="searchQuery" placeholder="请输入项目名称" />
+      <div class="search-bar" style="display: flex; gap: 12px; align-items: center;">
+        <input type="text" v-model="searchQuery" placeholder="请输入项目名称" style="flex: 1;" />
+        
+        <select v-model="sortBy" class="sort-select">
+          <option value="dateDesc">最近修改优先</option>
+          <option value="nameAsc">名称 A-Z</option>
+        </select>
+        
         <span class="search-icon">
           <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" class="css-i6dzq1"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
         </span>
@@ -28,15 +34,18 @@
       <!-- Project Cards -->
       <div class="card project-card" v-for="(project, index) in filteredProjects" :key="index">
         <div class="thumbnail">
-          <img v-if="project.preview_image" :src="convertFileSrc(project.preview_image)" class="preview-target project-preview-img" />
+          <img loading="lazy" v-if="project.preview_image" :src="convertFileSrc(project.preview_image)" class="preview-target project-preview-img" />
           <div v-else class="thumbnail-placeholder">
             <div class="placeholder-scene"></div>
           </div>
           
           <!-- Hover Overlay -->
         <div class="project-overlay" v-if="!runningProjects.has(project.path)">
+          <button class="delete-btn" @click.stop="confirmDeleteProject(project)" title="删除项目">
+            <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+          </button>
           <button class="action-btn main-btn" @click="openProject(project)">项目编辑</button>
-          <button class="action-btn sub-btn" @click="startDuplicate(project, '副本')">创建副本</button>
+          <button class="action-btn sub-btn" @click="startDuplicate(project)">创建副本</button>
         </div>
           
           <!-- Running Overlay -->
@@ -51,7 +60,7 @@
             <span class="edit-icon">
               <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
             </span>
-            <span class="name-text">
+            <span class="name-text" :title="project.name">
               {{ project.name }}
             </span>
           </div>
@@ -112,6 +121,38 @@
       </div>
     </div>
     
+    <!-- Progress Modal for Cloning -->
+    <div class="modal-overlay" v-if="isCloningProgressOpen">
+      <div class="modal-content" style="width: 400px;">
+        <h3>正在创建项目...</h3>
+        <p class="modal-desc" style="margin-bottom: 20px;">项目体积较大，可能需要几分钟的时间，请耐心等待。</p>
+        
+        <div class="progress-bar-container" style="width: 100%; height: 8px; background: #ebeef5; border-radius: 4px; overflow: hidden; margin-bottom: 8px;">
+          <div class="progress-bar-fill" :style="{ width: cloneProgressPercentage + '%', height: '100%', background: '#409eff', transition: 'width 0.2s ease' }"></div>
+        </div>
+        
+        <div style="display: flex; justify-content: space-between; font-size: 13px; color: #606266; margin-bottom: 20px;">
+          <span>{{ cloneProgressPercentage }}%</span>
+          <span>{{ cloneProgressText }}</span>
+        </div>
+        
+        <div class="modal-actions">
+          <button class="modal-btn cancel" @click="cancelCloneAction" style="margin-left: auto;">取消</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Engine Missing Modal -->
+    <div class="modal-overlay" v-if="isEngineMissingModalOpen">
+      <div class="modal-content">
+        <h3 style="color: #f56c6c;">引擎缺失提示</h3>
+        <p class="modal-desc">当前系统环境未找到该项目对应的 UE 版本 ({{ missingEngineVersionText }})，请先运行 Epic Launcher 安装所需引擎后再打开该项目！</p>
+        <div class="modal-actions">
+          <button class="modal-btn confirm delete" @click="isEngineMissingModalOpen = false">我知道了</button>
+        </div>
+      </div>
+    </div>
+    
     <!-- Rename Modal -->
     <div class="modal-overlay" v-if="isRenameModalOpen">
       <div class="modal-content">
@@ -130,6 +171,31 @@
         <div class="modal-actions">
           <button class="modal-btn cancel" @click="cancelRename">取消</button>
           <button class="modal-btn confirm" :disabled="!!renameValidationError" @click="confirmRename">确认重命名</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div class="modal-overlay" v-if="isDeleteModalOpen">
+      <div class="modal-content">
+        <h3 style="color: #f56c6c;">删除项目</h3>
+        <p class="modal-desc">确定要彻底删除项目 <span style="font-weight: 600; color: #303133;">"{{ pendingDeleteProject?.name }}"</span> 吗？</p>
+        <p class="modal-desc" style="font-size: 12px; margin-top: -8px; color: #909399;">此操作将永久删除项目，且不可恢复！</p>
+        <div class="modal-actions">
+          <button class="modal-btn cancel" @click="cancelDelete">取消</button>
+          <button class="modal-btn confirm delete" @click="executeDelete">确认删除</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Progress Modal for Deleting -->
+    <div class="modal-overlay" v-if="isDeletingProgressOpen">
+      <div class="modal-content" style="width: 400px;">
+        <h3 style="color: #f56c6c;">正在删除项目...</h3>
+        <p class="modal-desc" style="margin-bottom: 20px;">由于大型工程包含数万个缓存和关联文件，彻底清理可能需要一段较长时间，请耐心等待且请勿关闭程序。</p>
+        
+        <div class="progress-bar-container" style="width: 100%; height: 8px; background: #ebeef5; border-radius: 4px; overflow: hidden; margin-bottom: 8px;">
+          <div class="progress-bar-fill indeterminate" style="height: 100%; background: #f56c6c;"></div>
         </div>
       </div>
     </div>
@@ -175,7 +241,7 @@
                 @click="selectedTemplate = template"
               >
                 <div class="template-thumbnail">
-                  <img v-if="template.preview_image" :src="convertFileSrc(template.preview_image)" class="preview-target" />
+                  <img loading="lazy" v-if="template.preview_image" :src="convertFileSrc(template.preview_image)" class="preview-target" />
                   <div v-else class="fallback-thumbnail">
                     <!-- Template Layout Icon -->
                     <svg viewBox="0 0 24 24" width="48" height="48" stroke="#606266" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
@@ -185,7 +251,7 @@
                     </svg>
                   </div>
                 </div>
-                <div class="template-name">{{ template.name }}</div>
+                <div class="template-name" :title="template.name">{{ template.name }}</div>
               </div>
             </div>
             <div v-else class="empty-templates">
@@ -225,6 +291,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
+import { error as logError, warn as logWarn } from '@tauri-apps/plugin-log';
 
 interface ProjectInfo {
   name: string;
@@ -253,6 +320,10 @@ const isScanning = ref(false);
 const runningProjects = ref<Set<string>>(new Set());
 let unlistenFn: UnlistenFn | null = null;
 
+const isEngineMissingModalOpen = ref(false);
+const missingEngineVersionText = ref('');
+const sortBy = ref('dateDesc');
+
 // Toast System
 const toasts = ref<ToastMessage[]>([]);
 let toastIdCounter = 0;
@@ -264,6 +335,29 @@ function showToast(message: string, type: 'success' | 'error' | 'info' = 'info')
     toasts.value = toasts.value.filter(t => t.id !== id);
   }, 3000);
 }
+
+// Cloning Progress State
+const isCloningProgressOpen = ref(false);
+const cloneProgressCurrent = ref(0);
+const cloneProgressTotal = ref(0);
+let unlistenCloneFn: UnlistenFn | null = null;
+
+const cloneProgressText = computed(() => {
+  const currentGB = (cloneProgressCurrent.value / (1024 * 1024 * 1024)).toFixed(2);
+  const totalGB = (cloneProgressTotal.value / (1024 * 1024 * 1024)).toFixed(2);
+  return `${currentGB} GB / ${totalGB} GB`;
+});
+
+const cloneProgressPercentage = computed(() => {
+  if (cloneProgressTotal.value === 0) return 0;
+  return Math.min(100, Math.round((cloneProgressCurrent.value / cloneProgressTotal.value) * 100));
+});
+
+const cancelCloneAction = async () => {
+    isCloningProgressOpen.value = false;
+    showToast('操作已取消', 'info');
+    await invoke('cancel_clone');
+};
 
 // Clone Modal State
 const isCloneModalOpen = ref(false);
@@ -287,6 +381,11 @@ const renameInputName = ref('');
 const renameValidationError = ref('');
 const pendingRenameProject = ref<ProjectInfo | null>(null);
 
+// Delete Modal State
+const isDeleteModalOpen = ref(false);
+const isDeletingProgressOpen = ref(false);
+const pendingDeleteProject = ref<ProjectInfo | null>(null);
+
 // Validation Strings
 const createValidationError = ref('');
 const cloneValidationError = ref('');
@@ -297,8 +396,8 @@ function checkNameFormat(name: string): { valid: boolean; message: string } {
   if (!trimmed) {
     return { valid: false, message: '名称不能为空！' };
   }
-  if (trimmed.length > 12) {
-    return { valid: false, message: '名称不能超过 12 个字符！' };
+  if (trimmed.length > 25) {
+    return { valid: false, message: '名称不能超过 25 个字符！' };
   }
   const regex = /^[a-zA-Z0-9\u4e00-\u9fa5_]+$/;
   if (!regex.test(trimmed)) {
@@ -320,11 +419,11 @@ watch(renameInputName, async (newVal) => {
     return;
   }
 
-  const exists = await invoke<boolean>('check_project_folder_exists', { name: newVal.trim() });
-  if (exists) {
-    renameValidationError.value = '目录下已存在同名项目';
-  } else {
+  try {
+    await invoke('validate_project_name', { path: pendingRenameProject.value?.path, newName: newVal.trim() });
     renameValidationError.value = '';
+  } catch (err) {
+    renameValidationError.value = err as string;
   }
 });
 
@@ -336,11 +435,11 @@ watch(createInputName, async (newVal) => {
     return;
   }
   
-  const exists = await invoke<boolean>('check_project_folder_exists', { name: newVal.trim() });
-  if (exists) {
-    createValidationError.value = '目录下已存在同名项目';
-  } else {
+  try {
+    await invoke('validate_project_name', { path: selectedTemplate.value?.path, newName: newVal.trim() });
     createValidationError.value = '';
+  } catch (err) {
+    createValidationError.value = err as string;
   }
 });
 
@@ -352,19 +451,29 @@ watch(cloneInputName, async (newVal) => {
     return;
   }
   
-  const exists = await invoke<boolean>('check_project_folder_exists', { name: newVal.trim() });
-  if (exists) {
-    cloneValidationError.value = '目录下已存在同名项目';
-  } else {
+  try {
+    await invoke('validate_project_name', { path: pendingCloneProject.value?.path, newName: newVal.trim() });
     cloneValidationError.value = '';
+  } catch (err) {
+    cloneValidationError.value = err as string;
   }
 });
 
 
 const filteredProjects = computed(() => {
-  if (!searchQuery.value) return projects.value;
-  const q = searchQuery.value.toLowerCase();
-  return projects.value.filter(p => p.name.toLowerCase().includes(q));
+  let list = projects.value;
+  if (searchQuery.value) {
+    const q = searchQuery.value.toLowerCase();
+    list = list.filter(p => p.name.toLowerCase().includes(q));
+  }
+  
+  if (sortBy.value === 'dateDesc') {
+    return list.slice().sort((a, b) => b.last_modified - a.last_modified);
+  } else if (sortBy.value === 'nameAsc') {
+    return list.slice().sort((a, b) => a.name.localeCompare(b.name));
+  }
+  
+  return list;
 });
 
 // Clone Modal State
@@ -384,7 +493,7 @@ async function fetchTemplates() {
     const result = await invoke<TemplateInfo[]>('get_templates');
     templates.value = result;
   } catch (error) {
-    console.error('Failed to fetch templates:', error);
+    logError(`Failed to fetch templates: ${error}`);
   }
 }
 
@@ -402,10 +511,10 @@ function closeTemplateModal() {
 // Template Creation Modal State
 // (Removed duplicates)
 
-function createFromTemplate() {
+async function createFromTemplate() {
   if (!selectedTemplate.value) return;
   const template = selectedTemplate.value;
-  createInputName.value = `My${template.name}`;
+  createInputName.value = await findAvailableName(template.name, 'number', template.path);
   isCreateNameModalOpen.value = true;
 }
 
@@ -423,6 +532,10 @@ async function confirmCreateName() {
   isCreateNameModalOpen.value = false;
   isTemplateModalOpen.value = false;
   
+  isCloningProgressOpen.value = true;
+  cloneProgressCurrent.value = 0;
+  cloneProgressTotal.value = 0;
+  
   try {
     await invoke('clone_project', {
       sourceUprojectPath: template.path, 
@@ -432,8 +545,15 @@ async function confirmCreateName() {
     showToast('项目创建成功！', 'success');
     await scanProjects();
   } catch (error) {
-    console.error('Failed to create from template:', error);
-    showToast('创建项目失败: ' + error, 'error');
+    if (error === "CANCELLED") {
+      logWarn('User cancelled template clone process.');
+      // Toast already shown instantly in cancelCloneAction
+    } else {
+      logError(`Failed to create from template: ${error}`);
+      showToast('创建项目失败: ' + error, 'error');
+    }
+  } finally {
+    isCloningProgressOpen.value = false;
   }
 }
 
@@ -443,7 +563,7 @@ async function scanProjects() {
     const result = await invoke<ProjectInfo[]>('scan_projects');
     projects.value = result;
   } catch (error) {
-    console.error('Failed to scan projects:', error);
+    logError(`Failed to scan projects: ${error}`);
     showToast('扫描项目时出现错误', 'error');
   } finally {
     isScanning.value = false;
@@ -454,9 +574,9 @@ async function scanProjects() {
 // (Legacy startEditing removed)
 
 
-function startRename(project: ProjectInfo) {
+async function startRename(project: ProjectInfo) {
   pendingRenameProject.value = project;
-  renameInputName.value = project.name;
+  renameInputName.value = await findAvailableName(project.name, 'number', project.path);
   isRenameModalOpen.value = true;
 }
 
@@ -485,7 +605,7 @@ async function confirmRename() {
     isRenameModalOpen.value = false;
     await scanProjects();
   } catch (error) {
-    console.error('Failed to rename project:', error);
+    logError(`Failed to rename project: ${error}`);
     showToast('重命名失败: ' + error, 'error');
   }
 }
@@ -497,40 +617,52 @@ async function openProject(project: ProjectInfo) {
     runningProjects.value.add(project.path);
     await invoke('run_project', { path: project.path });
   } catch (error) {
-    console.error('Failed to open project:', error);
-    showToast('打开项目失败: ' + error, 'error');
+    const errStr = error as string;
+    if (errStr.startsWith("ENGINE_MISSING:")) {
+        missingEngineVersionText.value = errStr.replace("ENGINE_MISSING:", "");
+        isEngineMissingModalOpen.value = true;
+    } else {
+        logError(`Failed to open project: ${error}`);
+        showToast('打开项目失败: ' + error, 'error');
+    }
     runningProjects.value.delete(project.path);
   }
 }
 
-async function findAvailableName(baseName: string, suffix: string): Promise<string> {
-  // Logic: base_副本, then base_副本2, base_副本3...
-  // Use underscore only for the first one if it's the standard "副本"
-  let attempt = "";
-  if (suffix === "副本") {
-    attempt = `${baseName}_${suffix}`;
-  } else {
-    attempt = `${baseName}_${suffix}`;
-  }
-  
-  // Truncate base if total length exceeds 12
-  if (attempt.length > 12) {
-    attempt = attempt.slice(0, 12);
+async function findAvailableName(baseName: string, suffixMode: 'duplicate' | 'number', sourcePath?: string): Promise<string> {
+  let truncatedBase = baseName;
+  const maxBaseLen = suffixMode === 'duplicate' ? 20 : 21;
+  if (truncatedBase.length > maxBaseLen) {
+    truncatedBase = truncatedBase.slice(0, maxBaseLen);
   }
 
   let count = 1;
   while (true) {
-    const checkName = count === 1 ? attempt : `${attempt}${count}`;
-    const exists = await invoke<boolean>('check_project_folder_exists', { name: checkName });
-    if (!exists) return checkName;
+    let checkName = "";
+    if (suffixMode === 'duplicate') {
+      checkName = count === 1 ? `${truncatedBase}_副本` : `${truncatedBase}_副本${count}`;
+    } else {
+      checkName = `${truncatedBase}_${count}`;
+    }
+    
+    if (checkName.length > 25) {
+      checkName = checkName.slice(0, 25);
+    }
+
+    try {
+      await invoke('validate_project_name', { path: sourcePath, newName: checkName });
+      return checkName;
+    } catch {
+      // Exists or invalid, increment and try next
+    }
     count++;
-    if (count > 20) return attempt; // Guard
+    if (count > 30) return checkName; // Guard
   }
 }
 
-async function startDuplicate(project: ProjectInfo, modeSuffix: string) {
+async function startDuplicate(project: ProjectInfo) {
   pendingCloneProject.value = project;
-  cloneInputName.value = await findAvailableName(project.name, modeSuffix);
+  cloneInputName.value = await findAvailableName(project.name, 'duplicate', project.path);
   isCloneModalOpen.value = true;
 }
 
@@ -549,6 +681,10 @@ async function confirmCloneName() {
   const newName = cloneInputName.value.trim();
   isCloneModalOpen.value = false;
   
+  isCloningProgressOpen.value = true;
+  cloneProgressCurrent.value = 0;
+  cloneProgressTotal.value = 0;
+  
   try {
     await invoke('clone_project', {
       sourceUprojectPath: project.path,
@@ -557,12 +693,52 @@ async function confirmCloneName() {
     });
     
     showToast('项目副本创建成功！', 'success');
-    pendingCloneProject.value = null;
     await scanProjects();
   } catch (error) {
-    console.error('Failed to duplicate project:', error);
-    showToast('创建副本失败: ' + error, 'error');
+    if (error === "CANCELLED") {
+      logWarn('User cancelled duplicate clone process.');
+      // Toast already shown instantly in cancelCloneAction
+    } else {
+      logError(`Failed to duplicate project: ${error}`);
+      showToast('创建副本失败: ' + error, 'error');
+    }
+  } finally {
+    isCloningProgressOpen.value = false;
     pendingCloneProject.value = null;
+  }
+}
+
+async function confirmDeleteProject(project: ProjectInfo) {
+  if (runningProjects.value.has(project.path)) {
+    showToast('项目正在运行，无法删除！', 'error');
+    return;
+  }
+  pendingDeleteProject.value = project;
+  isDeleteModalOpen.value = true;
+}
+
+function cancelDelete() {
+  isDeleteModalOpen.value = false;
+  pendingDeleteProject.value = null;
+}
+
+async function executeDelete() {
+  const project = pendingDeleteProject.value;
+  if (!project) return;
+
+  isDeleteModalOpen.value = false;
+  isDeletingProgressOpen.value = true;
+
+  try {
+    await invoke('delete_project', { path: project.path });
+    showToast('项目已成功删除', 'success');
+    await scanProjects();
+  } catch (error) {
+    logError(`Failed to delete project: ${error}`);
+    showToast('删除失败: ' + error, 'error');
+  } finally {
+    isDeletingProgressOpen.value = false;
+    pendingDeleteProject.value = null;
   }
 }
 
@@ -587,6 +763,12 @@ onMounted(async () => {
       }
     });
 
+    unlistenCloneFn = await listen('clone-progress', (event) => {
+      const payload = event.payload as { current: number; total: number };
+      cloneProgressCurrent.value = payload.current;
+      cloneProgressTotal.value = payload.total;
+    });
+
     // Auto-scan projects on startup
     await scanProjects();
   } catch (e) {
@@ -598,6 +780,9 @@ onUnmounted(() => {
   if (unlistenFn) {
     unlistenFn();
   }
+  if (unlistenCloneFn) {
+    unlistenCloneFn();
+  }
 });
 </script>
 
@@ -606,6 +791,16 @@ html, body {
   margin: 0;
   padding: 0;
   background-color: #f7f9fc;
+}
+
+.indeterminate {
+  width: 50%;
+  animation: indeterminate-slide 1.5s infinite ease-in-out;
+}
+
+@keyframes indeterminate-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
 }
 
 .project-manager {
@@ -640,7 +835,7 @@ html, body {
   border: 1px solid #dcdfe6;
   border-radius: 4px;
   padding: 6px 12px;
-  width: 260px;
+  min-width: 400px;
   background: white;
   transition: border-color 0.2s;
 }
@@ -801,6 +996,11 @@ html, body {
   height: 100%;
   object-fit: cover;
   display: block;
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: high-quality;
+  transform: translateZ(0);
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
 }
 
 .thumbnail-placeholder {
@@ -850,6 +1050,29 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.delete-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  border-radius: 4px;
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.delete-btn:hover {
+  background: #f56c6c;
+  color: white;
+  transform: scale(1.1);
 }
 
 .main-btn {
@@ -947,7 +1170,7 @@ html, body {
   font-weight: 600;
   font-size: 14px;
   color: #303133;
-  max-width: 140px;
+  max-width: 160px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -965,7 +1188,7 @@ html, body {
   font-weight: 600;
   font-size: 14px;
   color: #303133;
-  max-width: 140px;
+  max-width: 160px;
   padding: 2px 4px;
   border: 1px solid #409eff;
   border-radius: 4px;
@@ -1080,6 +1303,14 @@ html, body {
 .modal-btn.confirm:disabled {
   background: #a0cfff;
   cursor: not-allowed;
+}
+
+.modal-btn.confirm.delete {
+  background: #f56c6c;
+}
+
+.modal-btn.confirm.delete:hover {
+  background: #f78989;
 }
 
 /* Template Modal Styles */
@@ -1303,6 +1534,11 @@ html, body {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: high-quality;
+  transform: translateZ(0);
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
 }
 
 .template-name {
@@ -1491,6 +1727,26 @@ html, body {
   margin-top: -8px;
   margin-bottom: 8px;
   text-align: left;
+}
+
+/* Sort Select Styles */
+.sort-select {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid #dcdfe6;
+  background-color: #f4f6f8;
+  color: #606266;
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.sort-select:hover {
+  border-color: #409eff;
+}
+.sort-select:focus {
+  border-color: #409eff;
+  box-shadow: 0 0 0 2px rgba(64,158,255,0.2);
 }
 
 </style>
