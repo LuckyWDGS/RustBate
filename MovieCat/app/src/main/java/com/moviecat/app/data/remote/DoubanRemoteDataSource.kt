@@ -9,6 +9,7 @@ import com.moviecat.app.data.model.ParsedPayload
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -26,16 +27,17 @@ enum class DoubanSection {
 class DoubanRemoteDataSource {
     private val tag = "MovieCatDouban"
     private val client = OkHttpClient.Builder()
-        .connectTimeout(12, TimeUnit.SECONDS)
-        .readTimeout(18, TimeUnit.SECONDS)
-        .callTimeout(24, TimeUnit.SECONDS)
+        .connectTimeout(6, TimeUnit.SECONDS)
+        .readTimeout(8, TimeUnit.SECONDS)
+        .callTimeout(10, TimeUnit.SECONDS)
         .followRedirects(true)
         .build()
 
     suspend fun fetchHomeRecommendations(limit: Int = 24): ParsedPayload = withContext(Dispatchers.IO) {
-        val tv = fetchRecentHotItems(category = "tv", type = "tv", limit = limit / 2)
-        val movie = fetchRecentHotItems(category = "movie", type = null, limit = limit / 2)
-        ParsedPayload(catalogItems = tv + movie, title = "豆瓣热播")
+        val halfLimit = limit / 2
+        val tv = async { fetchRecentHotItemsOrEmpty(category = "tv", type = "tv", limit = halfLimit) }
+        val movie = async { fetchRecentHotItemsOrEmpty(category = "movie", type = null, limit = halfLimit) }
+        ParsedPayload(catalogItems = tv.await() + movie.await(), title = "豆瓣热播")
     }
 
     suspend fun fetchSection(section: DoubanSection, limit: Int = 36): ParsedPayload = withContext(Dispatchers.IO) {
@@ -83,6 +85,14 @@ class DoubanRemoteDataSource {
                 sourceLabel = "豆瓣热播"
             )
         }
+    }
+
+    private fun fetchRecentHotItemsOrEmpty(category: String, type: String?, limit: Int): List<CatalogItem> {
+        return runCatching {
+            fetchRecentHotItems(category = category, type = type, limit = limit)
+        }.onFailure {
+            Log.w(tag, "recent hot failed category=$category type=$type", it)
+        }.getOrDefault(emptyList())
     }
 
     private fun fetchSearchSubjects(type: String, sort: String, limit: Int): List<CatalogItem> {

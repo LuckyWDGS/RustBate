@@ -850,14 +850,12 @@ class MovieCatViewModel(application: Application) : AndroidViewModel(application
         try {
             Log.d(tag, "loadSource start ${source.debugSummary()}")
             val payload = repository.fetchPayload(source)
-            val todayRecommendations = loadDoubanHomeRecommendations()
-                .ifEmpty { payload.featuredItems }
             Log.d(tag, "loadSource done ${source.label}: ${payload.debugSummary()}")
             _uiState.update {
                 it.copy(
                     isLoading = false,
                     catalogItems = payload.catalogItems,
-                    featuredItems = todayRecommendations,
+                    featuredItems = payload.featuredItems,
                     categories = payload.categories,
                     activeCategory = null,
                     searchResults = emptyList(),
@@ -869,13 +867,23 @@ class MovieCatViewModel(application: Application) : AndroidViewModel(application
                     errorMessage = if (
                         payload.catalogItems.isEmpty() &&
                         payload.discoveredSources.isEmpty() &&
-                        todayRecommendations.isEmpty()
+                        payload.featuredItems.isEmpty()
                     ) {
                         "当前源已连接，但还没有识别到可展示内容。"
                     } else {
                         null
                     }
                 )
+            }
+            val todayRecommendations = loadDoubanHomeRecommendations()
+            if (todayRecommendations.isNotEmpty()) {
+                _uiState.update { current ->
+                    if (current.selectedSourceId == source.id && current.activeCategory == null) {
+                        current.copy(featuredItems = todayRecommendations, errorMessage = null)
+                    } else {
+                        current
+                    }
+                }
             }
         } catch (throwable: Throwable) {
             Log.e(tag, "loadSource failed ${source.debugSummary()}", throwable)

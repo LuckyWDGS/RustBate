@@ -228,11 +228,13 @@ private fun movieCatLayout(maxWidth: Dp, maxHeight: Dp, isTv: Boolean): MovieCat
     val recommendationColumns = when {
         compact && width < 430f -> 2
         compact -> 3
-        tablet -> (homeContentWidth / 170f).toInt().coerceIn(3, 5)
-        else -> (homeContentWidth / 190f).toInt().coerceIn(5, 8)
+        tablet -> 4
+        tvLike -> 5
+        else -> 5
     }
-    val recommendationWidth = ((homeContentWidth - rowGap.value * (recommendationColumns - 1)) / recommendationColumns)
-        .coerceAtLeast(if (compact) 150f else 220f)
+    val rawRecommendationWidth = (homeContentWidth - rowGap.value * (recommendationColumns - 1)) / recommendationColumns
+    val recommendationWidth = rawRecommendationWidth
+        .coerceAtLeast(if (compact) 132f else 150f)
         .dp
 
     return MovieCatLayout(
@@ -246,7 +248,7 @@ private fun movieCatLayout(maxWidth: Dp, maxHeight: Dp, isTv: Boolean): MovieCat
         backdropHeight = (height * 0.33f).coerceIn(210f, if (tvLike) 360f else 290f).dp,
         mosaicTileWidth = percent(0.104f, 112f, 210f),
         mosaicTileHeight = percent(0.156f, 168f, 315f),
-        navPillHeight = scaled(44f, 34f, 52f),
+        navPillHeight = scaled(38f, 32f, 44f),
         navPillPadding = scaled(18f, 12f, 24f),
         actionWidth = percent(0.085f, if (handheldLandscape) 88f else 104f, if (tvLike) 150f else 132f),
         actionHeight = scaled(56f, 46f, 68f),
@@ -256,7 +258,7 @@ private fun movieCatLayout(maxWidth: Dp, maxHeight: Dp, isTv: Boolean): MovieCat
         wideHeight = percent(if (compact) 0.27f else 0.096f, 92f, if (tvLike) 168f else 126f),
         recommendationColumns = recommendationColumns,
         recommendationWidth = recommendationWidth,
-        recommendationHeight = (recommendationWidth.value * 1.48f).coerceIn(if (compact) 190f else 220f, if (tvLike) 360f else 300f).dp,
+        recommendationHeight = (recommendationWidth.value * 0.58f).coerceIn(if (compact) 86f else 104f, if (tvLike) 178f else 146f).dp,
         searchPadding = searchPadding,
         searchGap = searchGap,
         searchSideWidth = searchSideWidth,
@@ -373,6 +375,9 @@ fun HomeScreen(
                         onSearch = { searchOpen = true },
                         onConfig = { sourceDialogOpen = true },
                         onSwitchSource = { sourceDialogOpen = true },
+                        onCloudDrive = { sourceDialogOpen = true },
+                        onFavorites = { selectedPrimary = BrowsePrimaryCategory.Home.key },
+                        onPush = { sourceDialogOpen = true },
                         onSettings = { sourceDialogOpen = true }
                     )
                 }
@@ -384,10 +389,7 @@ fun HomeScreen(
                             isTv = isTv,
                             layout = layout,
                             history = playableHistory,
-                            favoriteKeys = favoriteKeys,
-                            favoriteKeyFor = ::favoriteKeyFor,
-                            onOpenDetails = onOpenDetails,
-                            onToggleFavorite = onToggleFavorite
+                            onOpenDetails = onOpenDetails
                         )
                     }
                 }
@@ -397,11 +399,8 @@ fun HomeScreen(
                         title = "今日推荐",
                         isTv = isTv,
                         layout = layout,
-                        items = state.catalogItems.ifEmpty { state.featuredItems },
-                        favoriteKeys = favoriteKeys,
-                        favoriteKeyFor = ::favoriteKeyFor,
-                        onOpenDetails = onOpenDetails,
-                        onToggleFavorite = onToggleFavorite
+                        items = state.featuredItems.ifEmpty { state.catalogItems },
+                        onOpenDetails = onOpenDetails
                     )
                 }
 
@@ -628,10 +627,13 @@ private fun HomeTopBar(
     }
 
     @Composable
-    fun PrimaryNav() {
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(layout.rowGap)) {
-            items(BrowsePrimaryCategory.entries.size) { index ->
-                val item = BrowsePrimaryCategory.entries[index]
+    fun PrimaryNav(modifier: Modifier = Modifier) {
+        Row(
+            modifier = modifier,
+            horizontalArrangement = Arrangement.spacedBy(if (layout.tvLike) 8.dp else layout.rowGap),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            BrowsePrimaryCategory.entries.forEach { item ->
                 TvNavPill(
                     label = item.label,
                     selected = selectedPrimary == item.key,
@@ -645,36 +647,31 @@ private fun HomeTopBar(
 
     @Composable
     fun StatusCluster() {
-        Row(horizontalArrangement = Arrangement.spacedBy(layout.rowGap), verticalAlignment = Alignment.CenterVertically) {
+        val lanStatus = lanServerStatus(lanServerRunning, lanServerUrls, lanServerMessage)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(if (layout.tvLike) 14.dp else 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             if (isLoading) {
-                CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
+                CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
             }
-            TopStatusChip(
+            TopInlineStatus(
                 icon = Icons.Outlined.Wifi,
-                label = networkStatus.displayLabel(),
                 accent = if (networkStatus.connected) Accent else Muted,
-                isTv = isTv,
-                layout = layout,
                 onClick = onNetworkClick
             )
-            TopStatusChip(
-                icon = Icons.Outlined.WbSunny,
-                label = weatherStatus.displayLabel(),
-                subLabel = weatherStatus.districtLabel(),
-                accent = if (weatherStatus.temperatureC != null) Gold else Muted,
-                isTv = isTv,
-                layout = layout
-            )
-            val lanStatus = lanServerStatus(lanServerRunning, lanServerUrls, lanServerMessage)
-            TopStatusChip(
+            TopInlineStatus(
                 icon = Icons.Outlined.CloudQueue,
-                label = lanStatus.label,
-                subLabel = lanStatus.subLabel,
-                accent = lanStatus.accent,
-                isTv = isTv,
-                layout = layout
+                accent = lanStatus.accent
             )
-            Text(time, color = Color.White.copy(alpha = 0.72f), fontSize = 16.sp)
+            Text(
+                weatherStatus.temperatureLabel(),
+                color = Color.White.copy(alpha = if (weatherStatus.temperatureC != null) 0.90f else 0.55f),
+                fontSize = if (layout.tvLike) 15.sp else 13.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1
+            )
+            Text(time, color = Color.White.copy(alpha = 0.72f), fontSize = if (layout.tvLike) 16.sp else 14.sp)
         }
     }
 
@@ -688,24 +685,41 @@ private fun HomeTopBar(
                 BrandLogo()
                 StatusCluster()
             }
-            PrimaryNav()
+            PrimaryNav(modifier = Modifier.fillMaxWidth())
         }
     } else {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(layout.rowGap),
             verticalAlignment = Alignment.CenterVertically
         ) {
             BrandLogo()
-            PrimaryNav()
-        }
-
+            Spacer(Modifier.width(if (layout.tvLike) 34.dp else 18.dp))
+            PrimaryNav(modifier = Modifier.weight(1f))
+            Spacer(Modifier.width(if (layout.tvLike) 22.dp else 12.dp))
             StatusCluster()
         }
+    }
+}
+
+@Composable
+private fun TopInlineStatus(
+    icon: ImageVector,
+    accent: Color,
+    onClick: (() -> Unit)? = null
+) {
+    val modifier = Modifier.size(24.dp)
+    if (onClick == null) {
+        Icon(icon, contentDescription = null, tint = accent, modifier = modifier)
+    } else {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = accent,
+            modifier = modifier
+                .clip(CircleShape)
+                .clickable(onClick = onClick)
+                .padding(1.dp)
+        )
     }
 }
 
@@ -783,25 +797,41 @@ private fun TopStatusChip(
 
 @Composable
 private fun TvNavPill(label: String, selected: Boolean, isTv: Boolean, layout: MovieCatLayout, onClick: () -> Unit) {
+    val pillWidth = when {
+        selected && label.length >= 3 -> if (layout.tvLike) 74.dp else 68.dp
+        selected -> if (layout.tvLike) 66.dp else 60.dp
+        label.length >= 3 -> if (layout.tvLike) 60.dp else 56.dp
+        else -> if (layout.tvLike) 48.dp else 44.dp
+    }
+    val horizontalPadding = when {
+        selected -> if (layout.tvLike) 12.dp else 10.dp
+        else -> if (layout.tvLike) 6.dp else 5.dp
+    }
     FocusContainer(
         isTv = isTv,
         onClick = onClick,
         shape = RoundedCornerShape(18.dp),
         focusedBorder = Accent,
         selected = selected,
-        modifier = Modifier.height(layout.navPillHeight)
+        showIdleBorder = selected,
+        modifier = Modifier
+            .width(pillWidth)
+            .height(layout.navPillHeight)
     ) {
         Box(
             modifier = Modifier
+                .fillMaxSize()
                 .background(if (selected) Color(0x3319E6F4) else Color.Transparent)
-                .padding(horizontal = layout.navPillPadding, vertical = 6.dp),
+                .padding(horizontal = horizontalPadding, vertical = 6.dp),
             contentAlignment = Alignment.Center
         ) {
             Text(
                 text = label,
                 color = if (selected) Accent else Color.White.copy(alpha = 0.65f),
-                fontSize = 15.sp,
-                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                fontSize = if (layout.tvLike) 13.sp else 12.sp,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }
@@ -816,24 +846,34 @@ private fun HomeActionRail(
     onSearch: () -> Unit,
     onConfig: () -> Unit,
     onSwitchSource: () -> Unit,
+    onCloudDrive: () -> Unit,
+    onFavorites: () -> Unit,
+    onPush: () -> Unit,
     onSettings: () -> Unit
 ) {
     val actions = listOf(
-        HomeAction("历史", Icons.Outlined.History, onHistory),
-        HomeAction("直播", Icons.Outlined.LiveTv, onLive),
-        HomeAction("搜索", Icons.Outlined.Search, onSearch),
-        HomeAction("配置", Icons.Outlined.Settings, onConfig),
-        HomeAction("线路", Icons.Outlined.SwapHoriz, onSwitchSource),
-        HomeAction("设置", Icons.Outlined.Tune, onSettings)
+        HomeAction("历史记录", "历史", Icons.Outlined.History, onHistory),
+        HomeAction("电视直播", "直播", Icons.Outlined.LiveTv, onLive),
+        HomeAction("搜索", "搜索", Icons.Outlined.Search, onSearch),
+        HomeAction("配置中心", "配置", Icons.Outlined.Settings, onConfig),
+        HomeAction("线路切换", "线路", Icons.Outlined.SwapHoriz, onSwitchSource),
+        HomeAction("网盘播放", "网盘", Icons.Outlined.CloudQueue, onCloudDrive),
+        HomeAction("我的收藏", "收藏", Icons.Outlined.StarBorder, onFavorites),
+        HomeAction("推送", "推送", Icons.Outlined.Send, onPush),
+        HomeAction("设置", "设置", Icons.Outlined.Tune, onSettings)
     )
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(layout.rowGap), modifier = Modifier.fillMaxWidth()) {
-        items(actions.size) { index ->
-            val action = actions[index]
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(if (layout.tvLike) 8.dp else 6.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        actions.forEach { action ->
             FocusGlowButton(
-                label = action.label,
+                label = if (layout.tvLike) action.label else action.shortLabel,
                 icon = action.icon,
                 isTv = isTv,
                 layout = layout,
+                modifier = Modifier.weight(1f),
+                useFixedWidth = false,
                 onClick = action.onClick
             )
         }
@@ -845,10 +885,7 @@ private fun ContinueWatchingSection(
     isTv: Boolean,
     layout: MovieCatLayout,
     history: List<LibraryEntry>,
-    favoriteKeys: Set<String>,
-    favoriteKeyFor: (CatalogItem) -> String,
-    onOpenDetails: (CatalogItem) -> Unit,
-    onToggleFavorite: (CatalogItem) -> Unit
+    onOpenDetails: (CatalogItem) -> Unit
 ) {
     val historyCards = remember(history) { history.take(12).map { it.toCatalogItem() } }
     SectionHeader("继续观看")
@@ -859,11 +896,9 @@ private fun ContinueWatchingSection(
                 item = item,
                 isTv = isTv,
                 layout = layout,
-                isFavorite = favoriteKeys.contains(favoriteKeyFor(item)),
                 selected = index == 0,
                 progressText = history[index].resumeHint(),
-                onClick = { onOpenDetails(item) },
-                onToggleFavorite = { onToggleFavorite(item) }
+                onClick = { onOpenDetails(item) }
             )
         }
     }
@@ -875,10 +910,7 @@ private fun RecommendationStrip(
     isTv: Boolean,
     layout: MovieCatLayout,
     items: List<CatalogItem>,
-    favoriteKeys: Set<String>,
-    favoriteKeyFor: (CatalogItem) -> String,
-    onOpenDetails: (CatalogItem) -> Unit,
-    onToggleFavorite: (CatalogItem) -> Unit
+    onOpenDetails: (CatalogItem) -> Unit
 ) {
     SectionHeader(title)
     FlowRow(
@@ -896,10 +928,8 @@ private fun RecommendationStrip(
                     item = item,
                     isTv = isTv,
                     layout = layout,
-                    isFavorite = favoriteKeys.contains(favoriteKeyFor(item)),
                     selected = index == 0,
-                    onClick = { onOpenDetails(item) },
-                    onToggleFavorite = { onToggleFavorite(item) }
+                    onClick = { onOpenDetails(item) }
                 )
             }
         }
@@ -911,9 +941,9 @@ private fun SectionHeader(title: String) {
     Text(
         text = title,
         color = Lime,
-        fontSize = 18.sp,
+        fontSize = 16.sp,
         fontWeight = FontWeight.Bold,
-        modifier = Modifier.padding(start = 2.dp, bottom = 8.dp)
+        modifier = Modifier.padding(start = 2.dp, bottom = 6.dp)
     )
 }
 
@@ -922,16 +952,13 @@ private fun HeroPosterCard(
     item: CatalogItem,
     isTv: Boolean,
     layout: MovieCatLayout,
-    isFavorite: Boolean,
     selected: Boolean,
     progressText: String,
-    onClick: () -> Unit,
-    onToggleFavorite: () -> Unit
+    onClick: () -> Unit
 ) {
     FocusContainer(
         isTv = isTv,
         onClick = onClick,
-        onLongClick = onToggleFavorite,
         shape = RoundedCornerShape(18.dp),
         selected = selected,
         modifier = Modifier.width(layout.heroWidth).height(layout.heroHeight)
@@ -944,7 +971,7 @@ private fun HeroPosterCard(
                 modifier = Modifier.fillMaxSize()
             )
             PosterGradient()
-            MediaBadges(item = item, isFavorite = isFavorite)
+            MediaBadges(item = item)
             Column(
                 modifier = Modifier.align(Alignment.BottomStart).padding(10.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -962,15 +989,12 @@ private fun WidePosterCard(
     item: CatalogItem,
     isTv: Boolean,
     layout: MovieCatLayout,
-    isFavorite: Boolean,
     selected: Boolean,
-    onClick: () -> Unit,
-    onToggleFavorite: () -> Unit
+    onClick: () -> Unit
 ) {
     FocusContainer(
         isTv = isTv,
         onClick = onClick,
-        onLongClick = onToggleFavorite,
         shape = RoundedCornerShape(16.dp),
         selected = selected,
         modifier = Modifier.width(layout.recommendationWidth).height(layout.recommendationHeight)
@@ -978,7 +1002,7 @@ private fun WidePosterCard(
         Box(modifier = Modifier.fillMaxSize().background(PanelStrong)) {
             PosterArtwork(title = item.title, coverUrl = item.coverUrl, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             PosterGradient()
-            MediaBadges(item = item, isFavorite = isFavorite, compact = true)
+            MediaBadges(item = item, compact = true)
             Column(
                 modifier = Modifier.align(Alignment.BottomStart).padding(10.dp),
                 verticalArrangement = Arrangement.spacedBy(3.dp)
@@ -986,12 +1010,11 @@ private fun WidePosterCard(
                 Text(
                     item.title,
                     color = Color.White,
-                    fontSize = 14.sp,
+                    fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
-                Text(item.watchHint(), color = Color.White.copy(alpha = 0.72f), fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -1033,22 +1056,18 @@ private fun RecommendationSkeletonCard(index: Int, layout: MovieCatLayout) {
 @Composable
 private fun BoxScope.MediaBadges(
     item: CatalogItem,
-    isFavorite: Boolean,
     compact: Boolean = false
 ) {
-    Row(
-        modifier = Modifier.align(Alignment.TopStart).padding(if (compact) 6.dp else 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        ratingLabel(item)?.let {
-            Badge(text = it, color = Color(0xC600B9C8))
-        }
-        item.sourceLabel?.let { Badge(text = it.sourceBadgeLabel(), color = Color(0xB4895800), textColor = Gold) }
-    }
-    FavoriteStarIndicator(
-        isFavorite = isFavorite,
-        compact = compact,
-        modifier = Modifier.align(Alignment.TopEnd).padding(if (compact) 6.dp else 8.dp)
+    Badge(
+        text = ratingLabel(item) ?: "0.0",
+        color = Color(0xC600B9C8),
+        modifier = Modifier.align(Alignment.TopStart).padding(if (compact) 5.dp else 8.dp)
+    )
+    Badge(
+        text = item.cardSourceLabel(),
+        color = Color(0xB4895800),
+        textColor = Gold,
+        modifier = Modifier.align(Alignment.TopEnd).padding(if (compact) 5.dp else 8.dp)
     )
 }
 
@@ -1056,7 +1075,7 @@ private fun BoxScope.MediaBadges(
 private fun FavoriteStarIndicator(isFavorite: Boolean, compact: Boolean, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
-            .size(if (compact) 28.dp else 32.dp)
+            .size(if (compact) 24.dp else 32.dp)
             .clip(CircleShape)
             .background(Color.Black.copy(alpha = if (isFavorite) 0.58f else 0.34f))
             .border(1.dp, if (isFavorite) Gold.copy(alpha = 0.82f) else Color.White.copy(alpha = 0.22f), CircleShape),
@@ -1066,7 +1085,7 @@ private fun FavoriteStarIndicator(isFavorite: Boolean, compact: Boolean, modifie
             imageVector = if (isFavorite) Icons.Outlined.Star else Icons.Outlined.StarBorder,
             contentDescription = null,
             tint = if (isFavorite) Gold else Color.White.copy(alpha = 0.72f),
-            modifier = Modifier.size(if (compact) 17.dp else 19.dp)
+            modifier = Modifier.size(if (compact) 15.dp else 19.dp)
         )
     }
 }
@@ -1074,9 +1093,24 @@ private fun FavoriteStarIndicator(isFavorite: Boolean, compact: Boolean, modifie
 @Composable
 private fun Badge(text: String, color: Color, textColor: Color = Color.White, modifier: Modifier = Modifier) {
     Box(
-        modifier = modifier.clip(RoundedCornerShape(5.dp)).background(color).padding(horizontal = 6.dp, vertical = 3.dp)
+        modifier = modifier
+            .widthIn(min = 48.dp)
+            .heightIn(min = 24.dp)
+            .clip(RoundedCornerShape(5.dp))
+            .background(color)
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+        contentAlignment = Alignment.Center
     ) {
-        Text(text, color = textColor, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        Text(
+            text,
+            color = textColor,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center
+        )
     }
 }
 
@@ -1920,26 +1954,46 @@ private fun FocusGlowButton(
     icon: ImageVector,
     isTv: Boolean,
     layout: MovieCatLayout,
+    modifier: Modifier = Modifier,
+    useFixedWidth: Boolean = true,
     onClick: () -> Unit,
     compact: Boolean = false,
     accent: Color = Accent
 ) {
+    val sizeModifier = if (useFixedWidth) {
+        Modifier
+            .width(if (compact) layout.actionWidth * 0.72f else layout.actionWidth)
+            .height(if (compact) 32.dp else layout.actionHeight)
+    } else {
+        Modifier
+            .fillMaxWidth()
+            .height(if (compact) 32.dp else layout.actionHeight)
+    }
     FocusContainer(
         isTv = isTv,
         onClick = onClick,
         shape = RoundedCornerShape(12.dp),
         focusedBorder = accent,
-        modifier = Modifier
-            .width(if (compact) layout.actionWidth * 0.72f else layout.actionWidth)
-            .height(if (compact) 32.dp else layout.actionHeight)
+        modifier = modifier.then(sizeModifier)
     ) {
         Row(
-            modifier = Modifier.fillMaxSize().background(Color.White.copy(alpha = 0.08f)).padding(horizontal = 14.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.White.copy(alpha = 0.08f))
+                .padding(horizontal = if (useFixedWidth) 14.dp else 6.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(if (useFixedWidth) 8.dp else 4.dp)
         ) {
-            Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(if (compact) 16.dp else 21.dp))
-            Text(label, color = if (compact) Gold else Color.White, fontSize = if (compact) 12.sp else 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(if (compact) 16.dp else if (useFixedWidth) 20.dp else 18.dp))
+            Text(
+                label,
+                modifier = if (useFixedWidth) Modifier else Modifier.weight(1f, fill = false),
+                color = if (compact) Gold else Color.White,
+                fontSize = if (compact) 12.sp else if (useFixedWidth) 13.sp else 10.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
@@ -1953,6 +2007,7 @@ private fun FocusContainer(
     onLongClick: (() -> Unit)? = null,
     focusedBorder: Color = Accent,
     selected: Boolean = false,
+    showIdleBorder: Boolean = true,
     content: @Composable BoxScope.() -> Unit
 ) {
     var focused by remember { mutableStateOf(false) }
@@ -1979,6 +2034,7 @@ private fun FocusContainer(
     val borderColor = when {
         focused -> focusedBorder
         selected -> focusedBorder.copy(alpha = 0.88f)
+        !showIdleBorder -> Color.Transparent
         else -> Stroke
     }
     val longPressModifier = if (onLongClick == null) {
@@ -2100,6 +2156,7 @@ private enum class BrowsePrimaryCategory(val key: String, val label: String) {
 
 private data class HomeAction(
     val label: String,
+    val shortLabel: String,
     val icon: ImageVector,
     val onClick: () -> Unit
 )
@@ -2192,6 +2249,13 @@ private fun String.sourceBadgeLabel(): String {
     }
 }
 
+private fun CatalogItem.cardSourceLabel(): String {
+    return sourceLabel
+        ?.takeIf { it.isNotBlank() }
+        ?.sourceBadgeLabel()
+        ?: mediaKindLabel()
+}
+
 private fun DeviceNetworkStatus.displayLabel(): String {
     return when {
         connected -> transportLabel
@@ -2211,6 +2275,14 @@ private fun WeatherStatus.displayLabel(): String {
 
 private fun WeatherStatus.districtLabel(): String? {
     return district?.takeIf { it.isNotBlank() }
+}
+
+private fun WeatherStatus.temperatureLabel(): String {
+    return when {
+        isLoading -> "定位中"
+        temperatureC != null -> "$temperatureC°C"
+        else -> "--°C"
+    }
 }
 
 private fun lanServerStatus(running: Boolean, urls: List<String>, message: String?): LanStatusDisplay {
