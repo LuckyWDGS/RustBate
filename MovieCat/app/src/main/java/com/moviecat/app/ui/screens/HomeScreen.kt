@@ -123,7 +123,8 @@ import com.moviecat.app.ui.components.PosterArtwork
 import com.moviecat.app.viewmodel.DeviceNetworkStatus
 import com.moviecat.app.viewmodel.MovieCatUiState
 import com.moviecat.app.viewmodel.WeatherStatus
-import java.time.LocalTime
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -136,6 +137,8 @@ private val Panel = Color(0xB811171B)
 private val PanelStrong = Color(0xDD10161B)
 private val Stroke = Color.White.copy(alpha = 0.16f)
 private val Muted = Color(0xFFAAB2BA)
+private val ChinaClockZone: ZoneId = ZoneId.of("Asia/Shanghai")
+private val ClockFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 
 private data class MovieCatLayout(
     val compact: Boolean,
@@ -2349,5 +2352,5 @@ private fun lanServerStatus(running: Boolean, urls: List<String>, message: Strin
 }
 
 private fun currentClockText(): String {
-    return LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm"))
+    return ZonedDateTime.now(ChinaClockZone).format(ClockFormatter)
 }
