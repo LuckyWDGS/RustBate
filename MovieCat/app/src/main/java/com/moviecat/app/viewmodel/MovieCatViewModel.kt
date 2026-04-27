@@ -1,7 +1,19 @@
 package com.moviecat.app.viewmodel
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Application
+import android.content.pm.PackageManager
+import android.location.Geocoder
+import android.location.Location
+import android.location.LocationManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.os.Build
+import android.os.CancellationSignal
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.moviecat.app.data.model.CatalogItem
@@ -15,12 +27,16 @@ import com.moviecat.app.data.model.SpiderMode
 import com.moviecat.app.data.remote.DoubanSection
 import com.moviecat.app.data.remote.LanControlServer
 import com.moviecat.app.data.remote.LanControlSnapshot
+import com.moviecat.app.data.remote.WeatherLocation
+import com.moviecat.app.data.remote.WeatherRemoteDataSource
 import com.moviecat.app.data.repository.CatalogRepository
 import com.moviecat.app.data.repository.SourceDraft
 import com.moviecat.app.util.debugSummary
 import com.moviecat.app.util.previewForLog
+import java.util.Locale
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -28,6 +44,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.Dispatchers
 
 data class MovieCatUiState(
     val isLoading: Boolean = false,
@@ -52,11 +71,28 @@ data class MovieCatUiState(
     val lanServerRunning: Boolean = false,
     val lanServerUrls: List<String> = emptyList(),
     val lanServerMessage: String? = null,
+    val networkStatus: DeviceNetworkStatus = DeviceNetworkStatus(),
+    val weatherStatus: WeatherStatus = WeatherStatus(),
     val playerSession: PlayerSession? = null
 ) {
     val selectedSource: SourceItem?
         get() = sources.firstOrNull { it.id == selectedSourceId }
 }
+
+data class DeviceNetworkStatus(
+    val connected: Boolean = false,
+    val transportLabel: String = "离线",
+    val hasInternet: Boolean = false
+)
+
+data class WeatherStatus(
+    val district: String? = null,
+    val temperatureC: Int? = null,
+    val condition: String? = null,
+    val isLoading: Boolean = false,
+    val errorMessage: String? = null,
+    val updatedAt: Long = 0L
+)
 
 private data class SearchSourceResult(
     val source: SourceItem,
@@ -67,7 +103,11 @@ private data class SearchSourceResult(
 
 class MovieCatViewModel(application: Application) : AndroidViewModel(application) {
     private val tag = "MovieCatVM"
+    private val app = application
     private val repository = CatalogRepository.create(application)
+    private val weatherDataSource = WeatherRemoteDataSource()
+    private val locationManager = application.getSystemService(LocationManager::class.java)
+    private val connectivityManager = application.getSystemService(ConnectivityManager::class.java)
     private val _uiState = MutableStateFlow(MovieCatUiState())
     val uiState = _uiState.asStateFlow()
 
@@ -90,8 +130,10 @@ class MovieCatViewModel(application: Application) : AndroidViewModel(application
     )
 
     private var autoSelected = false
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     init {
+        observeNetworkStatus()
         observeSources()
         observeFavorites()
         observeHistory()
@@ -99,6 +141,7 @@ class MovieCatViewModel(application: Application) : AndroidViewModel(application
             repository.seedDefaultSourcesIfNeeded()
             startLanServer()
         }
+        refreshHomeWeather()
     }
 
     fun refresh() {
@@ -108,6 +151,67 @@ class MovieCatViewModel(application: Application) : AndroidViewModel(application
             browseCategory(category)
         } else {
             loadSource(source)
+        }
+    }
+
+    fun refreshHomeWeather() {
+        val current = _uiState.value
+        if (current.weatherStatus.isLoading) {
+            return
+        }
+        if (!current.networkStatus.connected) {
+            _uiState.update {
+                it.copy(weatherStatus = it.weatherStatus.copy(isLoading = false, errorMessage = "当前网络不可用。"))
+            }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(weatherStatus = it.weatherStatus.copy(isLoading = true, errorMessage = null)) }
+            runCatching {
+                val location = currentFineWeatherLocation()
+                weatherDataSource.fetchCurrentWeather(location)
+            }.onSuccess { snapshot ->
+                _uiState.update {
+                    it.copy(
+                        weatherStatus = WeatherStatus(
+                            district = snapshot.district,
+                            temperatureC = snapshot.temperatureC,
+                            condition = snapshot.condition,
+                            isLoading = false,
+                            updatedAt = System.currentTimeMillis()
+                        )
+                    )
+                }
+            }.onFailure { throwable ->
+            Log.w(tag, "refreshWeather failed", throwable)
+                _uiState.update {
+                    it.copy(
+                        weatherStatus = it.weatherStatus.copy(
+                            isLoading = false,
+                            errorMessage = throwable.message ?: "天气刷新失败"
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    fun hasFineLocationPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(app, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+    }
+
+    fun onFineLocationPermissionResult(granted: Boolean) {
+        if (granted) {
+            refreshHomeWeather()
+        } else {
+            _uiState.update {
+                it.copy(
+                    weatherStatus = it.weatherStatus.copy(
+                        isLoading = false,
+                        errorMessage = "精确定位权限未开启。"
+                    )
+                )
+            }
         }
     }
 
@@ -475,6 +579,162 @@ class MovieCatViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    override fun onCleared() {
+        networkCallback?.let { callback ->
+            runCatching { connectivityManager.unregisterNetworkCallback(callback) }
+        }
+        networkCallback = null
+        lanControlServer.stop()
+        super.onCleared()
+    }
+
+    private fun observeNetworkStatus() {
+        _uiState.update { it.copy(networkStatus = currentNetworkStatus()) }
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                updateNetworkStatus()
+            }
+
+            override fun onLost(network: Network) {
+                updateNetworkStatus()
+            }
+
+            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+                updateNetworkStatus()
+            }
+        }
+        networkCallback = callback
+        runCatching {
+            connectivityManager.registerDefaultNetworkCallback(callback)
+        }.onFailure { error ->
+            Log.w(tag, "network callback unavailable", error)
+        }
+    }
+
+    private fun updateNetworkStatus() {
+        val status = currentNetworkStatus()
+        _uiState.update {
+            it.copy(
+                networkStatus = status,
+                weatherStatus = if (status.connected) {
+                    it.weatherStatus
+                } else {
+                    it.weatherStatus.copy(isLoading = false, errorMessage = "当前网络不可用。")
+                }
+            )
+        }
+    }
+
+    private fun currentNetworkStatus(): DeviceNetworkStatus {
+        val capabilities = connectivityManager.getNetworkCapabilities(connectivityManager.activeNetwork)
+            ?: return DeviceNetworkStatus()
+        val hasInternet = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        val validated = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        val connected = hasInternet && validated
+        val label = when {
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "Wi-Fi"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "有线"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "移动"
+            hasInternet -> "网络"
+            else -> "离线"
+        }
+        return DeviceNetworkStatus(
+            connected = connected,
+            transportLabel = if (connected) label else "离线",
+            hasInternet = hasInternet
+        )
+    }
+
+    private suspend fun currentFineWeatherLocation(): WeatherLocation {
+        if (!hasFineLocationPermission()) {
+            error("精确定位权限未开启。")
+        }
+        val location = currentFineLocation() ?: error("暂时无法获取精确定位。")
+        return WeatherLocation(
+            latitude = location.latitude,
+            longitude = location.longitude,
+            district = districtLabelFor(location)
+        )
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun currentFineLocation(): Location? {
+        val fresh = requestFreshLocation()
+        if (fresh != null) {
+            return fresh
+        }
+        return bestLastKnownLocation()
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun requestFreshLocation(): Location? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return null
+        }
+        val provider = preferredLocationProviders().firstOrNull { provider ->
+            runCatching { locationManager.isProviderEnabled(provider) }.getOrDefault(false)
+        } ?: return null
+        val deferred = CompletableDeferred<Location?>()
+        val cancellationSignal = CancellationSignal()
+        runCatching {
+            locationManager.getCurrentLocation(
+                provider,
+                cancellationSignal,
+                app.mainExecutor
+            ) { location ->
+                deferred.complete(location)
+            }
+        }.onFailure {
+            deferred.complete(null)
+        }
+        return try {
+            withTimeoutOrNull(8_000L) { deferred.await() }
+        } finally {
+            cancellationSignal.cancel()
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun bestLastKnownLocation(): Location? {
+        return preferredLocationProviders()
+            .mapNotNull { provider ->
+                runCatching { locationManager.getLastKnownLocation(provider) }.getOrNull()
+            }
+            .maxWithOrNull(
+                compareBy<Location> { it.time }
+                    .thenBy { it.accuracy }
+            )
+    }
+
+    private fun preferredLocationProviders(): List<String> {
+        return listOf(
+            FusedLocationProvider,
+            LocationManager.GPS_PROVIDER,
+            LocationManager.NETWORK_PROVIDER,
+            LocationManager.PASSIVE_PROVIDER
+        )
+    }
+
+    private suspend fun districtLabelFor(location: Location): String? = withContext(Dispatchers.IO) {
+        if (!Geocoder.isPresent()) {
+            return@withContext null
+        }
+        runCatching {
+            @Suppress("DEPRECATION")
+            Geocoder(app, Locale.CHINA)
+                .getFromLocation(location.latitude, location.longitude, 1)
+                ?.firstOrNull()
+                ?.let { address ->
+                    listOf(
+                        address.subLocality,
+                        address.subAdminArea,
+                        address.locality,
+                        address.adminArea
+                    ).firstOrNull { !it.isNullOrBlank() }
+                }
+        }.getOrNull()
+    }
+
     private fun observeSources() {
         viewModelScope.launch {
             repository.observeSources().collect { sources ->
@@ -804,6 +1064,8 @@ private fun String.primaryLabel(): String {
     }
 }
 
-private fun String.containsAny(vararg keywords: String): Boolean {
+    private fun String.containsAny(vararg keywords: String): Boolean {
     return keywords.any { keyword -> contains(keyword, ignoreCase = true) }
 }
+
+private const val FusedLocationProvider = "fused"

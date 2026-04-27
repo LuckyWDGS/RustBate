@@ -66,6 +66,8 @@ import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.WbSunny
+import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -118,7 +120,9 @@ import com.moviecat.app.data.model.LibraryEntry
 import com.moviecat.app.data.model.PlaylistGroup
 import com.moviecat.app.data.model.SourceItem
 import com.moviecat.app.ui.components.PosterArtwork
+import com.moviecat.app.viewmodel.DeviceNetworkStatus
 import com.moviecat.app.viewmodel.MovieCatUiState
+import com.moviecat.app.viewmodel.WeatherStatus
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.Job
@@ -284,6 +288,7 @@ fun HomeScreen(
     state: MovieCatUiState,
     isTv: Boolean,
     onRefresh: () -> Unit,
+    onHomeVisible: () -> Unit,
     onSearchQueryChange: (String) -> Unit,
     onSearch: () -> Unit,
     onClearSearch: () -> Unit,
@@ -292,8 +297,6 @@ fun HomeScreen(
     onSelectSource: (SourceItem) -> Unit,
     onAddSource: (String, String) -> Unit,
     onImportSource: (SourceItem) -> Unit,
-    onStartLanServer: () -> Unit,
-    onStopLanServer: () -> Unit,
     onOpenDetails: (CatalogItem) -> Unit,
     onUpdateDetailSelection: (Int, Int) -> Unit,
     onCloseDetails: () -> Unit,
@@ -320,6 +323,12 @@ fun HomeScreen(
         return item.stableEntryKey(sourceId)
     }
 
+    LaunchedEffect(selectedPrimary) {
+        if (selectedPrimary == BrowsePrimaryCategory.Home.key) {
+            onHomeVisible()
+        }
+    }
+
     Surface(color = Color.Black, modifier = Modifier.fillMaxSize()) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val layout = remember(maxWidth, maxHeight, isTv) { movieCatLayout(maxWidth, maxHeight, isTv) }
@@ -342,6 +351,12 @@ fun HomeScreen(
                         isTv = isTv,
                         layout = layout,
                         isLoading = state.isLoading,
+                        networkStatus = state.networkStatus,
+                        weatherStatus = state.weatherStatus,
+                        lanServerRunning = state.lanServerRunning,
+                        lanServerUrls = state.lanServerUrls,
+                        lanServerMessage = state.lanServerMessage,
+                        onNetworkClick = onRefresh,
                         onPrimaryClick = { primary ->
                             selectedPrimary = primary.key
                             onBrowsePrimaryCategory(primary.key)
@@ -358,9 +373,6 @@ fun HomeScreen(
                         onSearch = { searchOpen = true },
                         onConfig = { sourceDialogOpen = true },
                         onSwitchSource = { sourceDialogOpen = true },
-                        onCloud = {
-                            if (state.lanServerRunning) onStopLanServer() else onStartLanServer()
-                        },
                         onSettings = { sourceDialogOpen = true }
                     )
                 }
@@ -579,6 +591,12 @@ private fun HomeTopBar(
     isTv: Boolean,
     layout: MovieCatLayout,
     isLoading: Boolean,
+    networkStatus: DeviceNetworkStatus,
+    weatherStatus: WeatherStatus,
+    lanServerRunning: Boolean,
+    lanServerUrls: List<String>,
+    lanServerMessage: String?,
+    onNetworkClick: () -> Unit,
     onPrimaryClick: (BrowsePrimaryCategory) -> Unit
 ) {
     var time by remember { mutableStateOf(currentClockText()) }
@@ -631,6 +649,31 @@ private fun HomeTopBar(
             if (isLoading) {
                 CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
             }
+            TopStatusChip(
+                icon = Icons.Outlined.Wifi,
+                label = networkStatus.displayLabel(),
+                accent = if (networkStatus.connected) Accent else Muted,
+                isTv = isTv,
+                layout = layout,
+                onClick = onNetworkClick
+            )
+            TopStatusChip(
+                icon = Icons.Outlined.WbSunny,
+                label = weatherStatus.displayLabel(),
+                subLabel = weatherStatus.districtLabel(),
+                accent = if (weatherStatus.temperatureC != null) Gold else Muted,
+                isTv = isTv,
+                layout = layout
+            )
+            val lanStatus = lanServerStatus(lanServerRunning, lanServerUrls, lanServerMessage)
+            TopStatusChip(
+                icon = Icons.Outlined.CloudQueue,
+                label = lanStatus.label,
+                subLabel = lanStatus.subLabel,
+                accent = lanStatus.accent,
+                isTv = isTv,
+                layout = layout
+            )
             Text(time, color = Color.White.copy(alpha = 0.72f), fontSize = 16.sp)
         }
     }
@@ -662,6 +705,78 @@ private fun HomeTopBar(
         }
 
             StatusCluster()
+        }
+    }
+}
+
+@Composable
+private fun TopStatusChip(
+    icon: ImageVector,
+    label: String,
+    isTv: Boolean,
+    layout: MovieCatLayout,
+    onClick: (() -> Unit)? = null,
+    subLabel: String? = null,
+    accent: Color = Accent
+) {
+    val width = when {
+        subLabel != null && layout.tvLike -> 122.dp
+        subLabel != null -> 98.dp
+        layout.tvLike -> 92.dp
+        else -> 72.dp
+    }
+    @Composable
+    fun Content() {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.White.copy(alpha = 0.07f))
+                .padding(horizontal = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
+            Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(if (layout.tvLike) 19.dp else 17.dp))
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
+                Text(
+                    label,
+                    color = Color.White.copy(alpha = 0.90f),
+                    fontSize = if (layout.tvLike) 12.sp else 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (subLabel != null && layout.tvLike) {
+                    Text(
+                        subLabel,
+                        color = Muted,
+                        fontSize = 9.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+
+    val modifier = Modifier.width(width).height(if (layout.tvLike) 38.dp else 34.dp)
+    if (onClick == null) {
+        Box(
+            modifier = modifier
+                .clip(RoundedCornerShape(18.dp))
+                .background(Color.White.copy(alpha = 0.07f))
+                .border(1.dp, accent.copy(alpha = 0.36f), RoundedCornerShape(18.dp))
+        ) {
+            Content()
+        }
+    } else {
+        FocusContainer(
+            isTv = isTv,
+            onClick = onClick,
+            shape = RoundedCornerShape(18.dp),
+            focusedBorder = accent,
+            modifier = modifier
+        ) {
+            Content()
         }
     }
 }
@@ -701,7 +816,6 @@ private fun HomeActionRail(
     onSearch: () -> Unit,
     onConfig: () -> Unit,
     onSwitchSource: () -> Unit,
-    onCloud: () -> Unit,
     onSettings: () -> Unit
 ) {
     val actions = listOf(
@@ -710,7 +824,6 @@ private fun HomeActionRail(
         HomeAction("搜索", Icons.Outlined.Search, onSearch),
         HomeAction("配置", Icons.Outlined.Settings, onConfig),
         HomeAction("线路", Icons.Outlined.SwapHoriz, onSwitchSource),
-        HomeAction("管理页", Icons.Outlined.CloudQueue, onCloud),
         HomeAction("设置", Icons.Outlined.Tune, onSettings)
     )
     LazyRow(horizontalArrangement = Arrangement.spacedBy(layout.rowGap), modifier = Modifier.fillMaxWidth()) {
@@ -1991,6 +2104,12 @@ private data class HomeAction(
     val onClick: () -> Unit
 )
 
+private data class LanStatusDisplay(
+    val label: String,
+    val subLabel: String?,
+    val accent: Color
+)
+
 private val SourceAccent = listOf(
     Color(0xFF4FC3F7),
     Color(0xFF26A69A),
@@ -2070,6 +2189,40 @@ private fun String.sourceBadgeLabel(): String {
         contains("豆瓣", ignoreCase = true) -> "豆瓣"
         length <= 4 -> this
         else -> take(4)
+    }
+}
+
+private fun DeviceNetworkStatus.displayLabel(): String {
+    return when {
+        connected -> transportLabel
+        hasInternet -> "待验证"
+        else -> "离线"
+    }
+}
+
+private fun WeatherStatus.displayLabel(): String {
+    return when {
+        isLoading -> "定位中"
+        temperatureC != null -> "$temperatureC°C${condition?.let { " $it" }.orEmpty()}"
+        errorMessage != null -> "天气 --"
+        else -> "天气 --"
+    }
+}
+
+private fun WeatherStatus.districtLabel(): String? {
+    return district?.takeIf { it.isNotBlank() }
+}
+
+private fun lanServerStatus(running: Boolean, urls: List<String>, message: String?): LanStatusDisplay {
+    val isError = !running || urls.isEmpty() || message?.contains("失败") == true
+    return if (isError) {
+        LanStatusDisplay(label = "管理异常", subLabel = null, accent = Color(0xFFFF7A59))
+    } else {
+        LanStatusDisplay(
+            label = "管理就绪",
+            subLabel = urls.firstOrNull()?.substringAfter("//")?.substringBefore(":"),
+            accent = Accent
+        )
     }
 }
 
