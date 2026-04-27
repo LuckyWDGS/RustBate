@@ -157,6 +157,7 @@ private data class MovieCatLayout(
     val wideWidth: Dp,
     val wideHeight: Dp,
     val recommendationColumns: Int,
+    val recommendationGap: Dp,
     val recommendationWidth: Dp,
     val recommendationHeight: Dp,
     val searchPadding: Dp,
@@ -192,7 +193,15 @@ private fun movieCatLayout(maxWidth: Dp, maxHeight: Dp, isTv: Boolean): MovieCat
     fun scaled(base: Float, min: Float, max: Float): Dp = (base * scale).coerceIn(min, max).dp
     fun percent(value: Float, min: Float, max: Float): Dp = (width * value).coerceIn(min, max).dp
 
-    val screenPadding = percent(if (compact) 0.044f else 0.031f, if (compact) 14f else 24f, if (tvLike) 58f else 34f)
+    val screenPadding = percent(
+        when {
+            compact -> 0.044f
+            tvLike -> 0.026f
+            else -> 0.028f
+        },
+        if (compact) 14f else 24f,
+        if (tvLike) 48f else 34f
+    )
     val rowGap = scaled(10f, 8f, 16f)
     val searchPadding = percent(if (compact) 0.04f else 0.022f, if (compact) 14f else 24f, if (tvLike) 42f else 28f)
     val searchGap = percent(if (compact) 0.028f else 0.020f, 12f, 34f)
@@ -228,13 +237,27 @@ private fun movieCatLayout(maxWidth: Dp, maxHeight: Dp, isTv: Boolean): MovieCat
     val recommendationColumns = when {
         compact && width < 430f -> 2
         compact -> 3
-        tablet -> 4
-        tvLike -> 5
-        else -> 5
+        tablet -> 5
+        tvLike -> 6
+        else -> 6
     }
-    val rawRecommendationWidth = (homeContentWidth - rowGap.value * (recommendationColumns - 1)) / recommendationColumns
+    val recommendationGap = scaled(8f, 6f, 12f)
+    val recommendationFitSlack = if (tvLike) 8f else 4f
+    val rawRecommendationWidth = (
+        homeContentWidth -
+            recommendationGap.value * (recommendationColumns - 1) -
+            recommendationFitSlack
+        ) / recommendationColumns
+    val recommendationMinWidth = when {
+        compact -> 112f
+        tvLike -> 132f
+        else -> 124f
+    }
     val recommendationWidth = rawRecommendationWidth
-        .coerceAtLeast(if (compact) 132f else 150f)
+        .coerceAtLeast(recommendationMinWidth)
+        .dp
+    val recommendationHeight = (recommendationWidth.value * 1.38f)
+        .coerceIn(if (compact) 168f else if (tvLike) 196f else 190f, if (tvLike) 260f else 300f)
         .dp
 
     return MovieCatLayout(
@@ -257,8 +280,9 @@ private fun movieCatLayout(maxWidth: Dp, maxHeight: Dp, isTv: Boolean): MovieCat
         wideWidth = percent(if (compact) 0.46f else 0.170f, 152f, if (tvLike) 296f else 230f),
         wideHeight = percent(if (compact) 0.27f else 0.096f, 92f, if (tvLike) 168f else 126f),
         recommendationColumns = recommendationColumns,
+        recommendationGap = recommendationGap,
         recommendationWidth = recommendationWidth,
-        recommendationHeight = (recommendationWidth.value * 0.58f).coerceIn(if (compact) 86f else 104f, if (tvLike) 178f else 146f).dp,
+        recommendationHeight = recommendationHeight,
         searchPadding = searchPadding,
         searchGap = searchGap,
         searchSideWidth = searchSideWidth,
@@ -399,7 +423,7 @@ fun HomeScreen(
                         title = "今日推荐",
                         isTv = isTv,
                         layout = layout,
-                        items = state.featuredItems.ifEmpty { state.catalogItems },
+                        items = state.featuredItems,
                         onOpenDetails = onOpenDetails
                     )
                 }
@@ -915,8 +939,9 @@ private fun RecommendationStrip(
     SectionHeader(title)
     FlowRow(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(layout.rowGap),
-        verticalArrangement = Arrangement.spacedBy(layout.rowGap)
+        horizontalArrangement = Arrangement.spacedBy(layout.recommendationGap),
+        verticalArrangement = Arrangement.spacedBy(layout.recommendationGap),
+        maxItemsInEachRow = layout.recommendationColumns
     ) {
         if (items.isEmpty()) {
             repeat(layout.recommendationColumns * 2) { index ->
@@ -924,11 +949,15 @@ private fun RecommendationStrip(
             }
         } else {
             items.take(layout.recommendationColumns * 3).forEachIndexed { index, item ->
-                WidePosterCard(
+                HeroPosterCard(
                     item = item,
                     isTv = isTv,
                     layout = layout,
                     selected = index == 0,
+                    progressText = null,
+                    cardWidth = layout.recommendationWidth,
+                    cardHeight = layout.recommendationHeight,
+                    compactBadges = true,
                     onClick = { onOpenDetails(item) }
                 )
             }
@@ -953,7 +982,10 @@ private fun HeroPosterCard(
     isTv: Boolean,
     layout: MovieCatLayout,
     selected: Boolean,
-    progressText: String,
+    progressText: String?,
+    cardWidth: Dp = layout.heroWidth,
+    cardHeight: Dp = layout.heroHeight,
+    compactBadges: Boolean = false,
     onClick: () -> Unit
 ) {
     FocusContainer(
@@ -961,7 +993,7 @@ private fun HeroPosterCard(
         onClick = onClick,
         shape = RoundedCornerShape(18.dp),
         selected = selected,
-        modifier = Modifier.width(layout.heroWidth).height(layout.heroHeight)
+        modifier = Modifier.width(cardWidth).height(cardHeight)
     ) {
         Box(modifier = Modifier.fillMaxSize().background(PanelStrong)) {
             PosterArtwork(
@@ -971,50 +1003,16 @@ private fun HeroPosterCard(
                 modifier = Modifier.fillMaxSize()
             )
             PosterGradient()
-            MediaBadges(item = item)
+            MediaBadges(item = item, compact = compactBadges)
             Column(
                 modifier = Modifier.align(Alignment.BottomStart).padding(10.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Text(item.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(progressText, color = Color.White.copy(alpha = 0.78f), fontSize = 11.sp)
-                ProgressRail(item = item, layout = layout)
-            }
-        }
-    }
-}
-
-@Composable
-private fun WidePosterCard(
-    item: CatalogItem,
-    isTv: Boolean,
-    layout: MovieCatLayout,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    FocusContainer(
-        isTv = isTv,
-        onClick = onClick,
-        shape = RoundedCornerShape(16.dp),
-        selected = selected,
-        modifier = Modifier.width(layout.recommendationWidth).height(layout.recommendationHeight)
-    ) {
-        Box(modifier = Modifier.fillMaxSize().background(PanelStrong)) {
-            PosterArtwork(title = item.title, coverUrl = item.coverUrl, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-            PosterGradient()
-            MediaBadges(item = item, compact = true)
-            Column(
-                modifier = Modifier.align(Alignment.BottomStart).padding(10.dp),
-                verticalArrangement = Arrangement.spacedBy(3.dp)
-            ) {
-                Text(
-                    item.title,
-                    color = Color.White,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
+                if (progressText != null) {
+                    Text(progressText, color = Color.White.copy(alpha = 0.78f), fontSize = 11.sp)
+                    ProgressRail(item = item, layout = layout)
+                }
             }
         }
     }
@@ -1058,16 +1056,57 @@ private fun BoxScope.MediaBadges(
     item: CatalogItem,
     compact: Boolean = false
 ) {
-    Badge(
+    RatingBadge(
         text = ratingLabel(item) ?: "0.0",
-        color = Color(0xC600B9C8),
+        compact = compact,
         modifier = Modifier.align(Alignment.TopStart).padding(if (compact) 5.dp else 8.dp)
     )
-    Badge(
+    SourceBadge(
         text = item.cardSourceLabel(),
-        color = Color(0xB4895800),
-        textColor = Gold,
+        compact = compact,
         modifier = Modifier.align(Alignment.TopEnd).padding(if (compact) 5.dp else 8.dp)
+    )
+}
+
+@Composable
+private fun RatingBadge(text: String, compact: Boolean, modifier: Modifier = Modifier) {
+    Badge(
+        text = text,
+        color = Color(0xD219E6F4),
+        textColor = Color.White,
+        modifier = modifier,
+        minWidth = if (compact) 46.dp else 52.dp,
+        maxWidth = if (compact) 56.dp else 74.dp,
+        minHeight = if (compact) 30.dp else 28.dp,
+        fontSize = 9,
+        brush = Brush.linearGradient(
+            listOf(
+                Color(0xEC1AEAF5),
+                Color(0xCC09AFC3),
+                Color(0xAA04737E)
+            )
+        )
+    )
+}
+
+@Composable
+private fun SourceBadge(text: String, compact: Boolean, modifier: Modifier = Modifier) {
+    Badge(
+        text = text,
+        color = Color(0xC48B6400),
+        textColor = Gold,
+        modifier = modifier,
+        minWidth = if (compact) 72.dp else 78.dp,
+        maxWidth = if (compact) 96.dp else 146.dp,
+        minHeight = if (compact) 30.dp else 28.dp,
+        fontSize = 9,
+        brush = Brush.linearGradient(
+            listOf(
+                Color(0xDAA87800),
+                Color(0xC78B6400),
+                Color(0x9A5D4300)
+            )
+        )
     )
 }
 
@@ -1091,20 +1130,35 @@ private fun FavoriteStarIndicator(isFavorite: Boolean, compact: Boolean, modifie
 }
 
 @Composable
-private fun Badge(text: String, color: Color, textColor: Color = Color.White, modifier: Modifier = Modifier) {
+private fun Badge(
+    text: String,
+    color: Color,
+    textColor: Color = Color.White,
+    modifier: Modifier = Modifier,
+    minWidth: Dp = 48.dp,
+    maxWidth: Dp = Dp.Infinity,
+    minHeight: Dp = 24.dp,
+    fontSize: Int = 9,
+    brush: Brush? = null
+) {
+    val backgroundModifier = if (brush == null) {
+        Modifier.background(color)
+    } else {
+        Modifier.background(brush)
+    }
     Box(
         modifier = modifier
-            .widthIn(min = 48.dp)
-            .heightIn(min = 24.dp)
+            .widthIn(min = minWidth, max = maxWidth)
+            .heightIn(min = minHeight)
             .clip(RoundedCornerShape(5.dp))
-            .background(color)
+            .then(backgroundModifier)
             .padding(horizontal = 6.dp, vertical = 2.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text,
             color = textColor,
-            fontSize = 9.sp,
+            fontSize = fontSize.sp,
             fontWeight = FontWeight.Bold,
             maxLines = 1,
             softWrap = false,
@@ -2242,11 +2296,7 @@ private fun CatalogItem.watchHint(): String {
 }
 
 private fun String.sourceBadgeLabel(): String {
-    return when {
-        contains("豆瓣", ignoreCase = true) -> "豆瓣"
-        length <= 4 -> this
-        else -> take(4)
-    }
+    return trim().takeIf { it.isNotBlank() } ?: this
 }
 
 private fun CatalogItem.cardSourceLabel(): String {
